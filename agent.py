@@ -60,38 +60,50 @@ def extract_json(text: str) -> list | None:
 
 
 
-SYSTEM_PROMPT = """你是一个Windows桌面自动化助手。你已经收到了屏幕截图，请直接分析截图内容并返回操作指令。
+SYSTEM_PROMPT = SYSTEM_PROMPT = """你是一个Windows桌面自动化助手。你已经收到屏幕截图，请直接分析内容并返回操作指令。
 
-## 可用的操作命令：
-1. **返回桌面** - 按Win+D返回Windows桌面
-2. **点击(x, y)** - 在指定坐标点击左键
-3. **双击(x, y)** - 在指定坐标双击左键
-4. **右键点击(x, y)** - 在指定坐标点击右键
-5. **输入(text)** - 输入文本
-6. **按键(key)** - 按下单个按键（如enter, esc, tab等）
-7. **快捷键(*keys)** - 按下组合键（如ctrl+c, alt+tab等）
-8. **滚动(clicks)** - 滚动鼠标滚轮
-9. **等待(seconds)** - 等待指定秒数
-10. **打开应用(path)** - 打开指定路径的应用程序
+## 可用操作命令：
+1. 返回桌面 - 按Win+D返回Windows桌面
+2. 点击(x, y) - 在指定坐标点击左键
+3. 双击(x, y) - 在指定坐标双击左键
+4. 右键点击(x, y) - 在指定坐标点击右键
+5. 输入(text) - 输入文本
+6. 按键(key) - 按下单个按键（enter, esc, tab等）
+7. 快捷键(*keys) - 按下组合键（ctrl+c, alt+tab等）
+8. 滚动(clicks) - 滚动鼠标滚轮
+9. 等待(seconds) - 等待指定秒数
+10. 打开应用(path) - 打开指定路径的应用程序
 
-## 输出格式要求：
-直接返回JSON格式的操作指令，不要有其他文字：
-{"action": "操作类型", "x": 数值, "y": 数值, "text": "文本内容", "key": "按键名", "keys": ["键1", "键2"], "clicks": 数值, "seconds": 数值, "path": "路径", "plan": "执行计划文本"}
+## 核心坐标规则（必须严格执行，优先级最高）：
+1. 屏幕坐标系：左上角(0,0),右下角坐标(999,999)，右下角为当前屏幕分辨率的像素坐标
+2. 坐标计算逻辑：
+   - 第一步：识别目标图标/按钮的**完整像素区域**（如左上角x1,y1，右下角x2,y2）
+   - 第二步：计算正中心坐标：x = (x1 + x2) / 2，y = (y1 + y2) / 2
+   - 第三步：将x、y取整数（四舍五入）作为最终点击坐标
+3. 禁止行为：
+   - 禁止返回目标的左上角、右上角、左下角、右下角坐标
+   - 禁止返回边缘、角落坐标
+   - 禁止直接使用识别到的初始坐标（必须经过中心计算）
+4. 验证要求：返回坐标前，必须确认该坐标位于目标图标/按钮的几何正中心，无任何偏移
 
-## 分析步骤：
-1. 仔细分析收到的截图内容
-2. 判断当前是否在桌面、是否有所需的应用
-3. 如果不在桌面，先返回桌面
-4. 如果找不到目标，先返回桌面
-5. 找到目标后执行相应操作
+## 输出格式（必须严格遵守）：
+直接返回JSON，无任何额外文字、注释、前缀：
+{"action": "操作类型", "x": 数值, "y": 数值, "text": "文本内容", "key": "按键名", "keys": ["键1", "键2"], "clicks": 数值, "seconds": 数值, "path": "路径", "plan": "执行计划文本","need_screenshot":true}
 
-## 重要规则：
-- 屏幕坐标从左上角(0,0)开始,到右下角（999,999)结束
-- 点击、右键点击、双击操作需要命中在点击目标的正中心
-- 如果任务完成，返回"完成: 任务已完成"
-- 不要返回截屏操作，截图已经提供给你分析
-- 如果不确定当前界面，先返回桌面
-- 直接返回JSON，不要有任何前缀文字
+## 执行逻辑：
+1. 先判断任务目标当前是否在桌面
+   当前页面不是桌面 → 先执行返回桌面
+   当前页面是桌面 → 找到目标图标，按坐标规则计算正中心坐标，执行点击/双击
+2. 执行完操作后，判断任务是否已完成
+   任务完成→ 返回 "完成: 任务已完成"
+   任务未完成 → 截屏，分析图片，继续尝试执行操作
+3. 界面不确定 → 先返回桌面
+
+## 强制约束：
+- 只输出标准JSON，无多余内容
+- 坐标必须为目标图标正中心（必须经过x=(x1+x2)/2、y=(y1+y2)/2计算）
+- 错误示例（禁止返回）：目标图标区域(100,200)-(200,300)，返回(100,200)（左上角）
+- 正确示例（必须返回）：目标图标区域(100,200)-(200,300)，返回(150,250)（正中心）
 """
 
 CLIENT = None
@@ -132,11 +144,12 @@ def analyze_with_image(client: OpenAI, user_prompt: str, image_path: str | None 
     
     if user_content:
         messages.append({"role": "user", "content": user_content})
-    
     response = client.chat.completions.create(
         model=config.MODEL_NAME,
         messages=messages,
-        temperature=0.7
+        temperature=0,
+        extra_body={"enable_thinking": False}
+
     )
     precheck_resp=response.choices[0].message.content
     pre_actions = extract_json(precheck_resp)
@@ -162,7 +175,8 @@ class Agent:
         llm_client = get_llm_client()
         
         # Step 1: Preliminary model pass to decide if a screenshot is needed
-        pre_actions = analyze_with_image(llm_client, f"任务: {task}")
+        current_screenshot = self.executor.screenshot()
+        pre_actions = analyze_with_image(llm_client, f"任务: {task}",image_path=current_screenshot)
         log_callback(str(pre_actions), "response")
         plan_text = None
         need_screenshot = False

@@ -1,5 +1,9 @@
+import ctypes
 import os
+import sys
 import time
+from ctypes import wintypes
+
 import pyautogui
 import subprocess
 from PIL import Image
@@ -10,37 +14,87 @@ import base64
 
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.5
+
+
+def get_primary_monitor_info() -> dict:
+    """
+    兼容所有Windows版本的显示器信息获取（替换GetDpiForMonitor）
+    返回：{"width": 物理宽度, "height": 物理高度, "scale_x": X轴缩放, "scale_y": Y轴缩放}
+    """
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+
+    # 方案1：让进程感知DPI（基础兼容）
+    try:
+        # Windows 10/11 高DPI感知
+        user32.SetProcessDpiAwarenessContext(2)  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+    except:
+        # 兼容旧系统
+        user32.SetProcessDPIAware()
+
+    # 获取主显示器物理分辨率
+    screen_width = user32.GetSystemMetrics(0)  # SM_CXSCREEN
+    screen_height = user32.GetSystemMetrics(1)  # SM_CYSCREEN
+
+    # 方案2：通过GetDeviceCaps获取DPI（替代GetDpiForMonitor）
+    hdc = user32.GetDC(None)  # 获取屏幕DC
+    dpi_x = gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX = 88
+    dpi_y = gdi32.GetDeviceCaps(hdc, 90)  # LOGPIXELSY = 90
+    user32.ReleaseDC(None, hdc)  # 释放DC
+
+    # 计算DPI缩放因子（96是Windows默认DPI）
+    scale_x = dpi_x / 96.0
+    scale_y = dpi_y / 96.0
+
+    return {
+        "width": screen_width,
+        "height": screen_height,
+        "scale_x": scale_x,
+        "scale_y": scale_y
+    }
+
+
 def translate_x_y_to_screen_coord(x: int, y: int) -> tuple:
     """
-    将归一化坐标 (x, y)（范围 0-999）转换为当前屏幕的实际像素坐标
-    使用 pyautogui 获取屏幕分辨率，兼容 Windows/macOS/Linux
+    将千分比坐标(x, y)（0-999）映射到实际屏幕像素坐标。
+    基准坐标为 1920x1200 的逻辑坐标，考虑实际主显示器分辨率和 DPI 缩放。
 
-    Args:
-        x: 归一化x坐标，范围0-999
-        y: 归一化y坐标，范围0-999
+    参数:
+        x: 水平方向千分比 (0-999)
+        y: 垂直方向千分比 (0-999)
 
-    Returns:
-        tuple: (实际屏幕x像素, 实际屏幕y像素)
-
-    Raises:
-        ValueError: 当x或y超出0-999范围时抛出
+    返回:
+        tuple: (屏幕像素X坐标, 屏幕像素Y坐标)
     """
-    # 1. 输入参数校验
+    # 校验输入范围
     if not (0 <= x <= 999) or not (0 <= y <= 999):
-        raise ValueError(f"x和y必须在0-999之间，当前输入：x={x}, y={y}")
+        raise ValueError(f"x和y必须是0-999之间的整数，当前输入：x={x}, y={y}")
 
-    # 2. 获取屏幕分辨率（核心：pyautogui 原生方法）
-    screen_width, screen_height = pyautogui.size()
-    print(f"当前屏幕分辨率：{screen_width} × {screen_height}")  # 可选：打印分辨率
+    info = get_primary_monitor_info()
+    screen_width = info["width"]
+    screen_height = info["height"]
+    base_w, base_h = 1920, 1200
 
-    # 3. 按比例转换坐标（四舍五入为整数像素）
-    screen_x = round(x * screen_width / 999)
-    screen_y = round(y * screen_height / 999)
+    # 步骤1：将千分比转换为基准逻辑坐标（1920x1200）的绝对坐标
+    base_x = (x / 999) * base_w
+    base_y = (y / 999) * base_h
 
-    # 4. 边界防护：确保坐标不超出屏幕范围
-    screen_x = max(0, min(screen_x, screen_width))
-    screen_y = max(0, min(screen_y, screen_height))
+    # 步骤2：计算缩放比例（考虑DPI缩放）
+    # scale_w = (screen_width / base_w) * info.get("scale_x", 1.0)
+    # scale_h = (screen_height / base_h) * info.get("scale_y", 1.0)
 
+    scale_w = (screen_width / base_w) * 1.0
+    scale_h = (screen_height / base_h) * 1.0
+
+    # 步骤3：转换为实际屏幕像素坐标
+    screen_x = round(base_x * scale_w)
+    screen_y = round(base_y * scale_h)
+
+    # 边界保护（确保坐标在屏幕范围内）
+    screen_x = max(0, min(screen_x, screen_width - 1))
+    screen_y = max(0, min(screen_y, screen_height - 1))
+
+    print(f"转换后的坐标：x={screen_x}, y={screen_y} (原千分比 x={x}, y={y})")
     return (screen_x, screen_y)
 
 class Executor:
