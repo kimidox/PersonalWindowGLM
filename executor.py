@@ -187,7 +187,7 @@ class Executor:
             return self.press_key(key)
             
         elif action_type == "hotkey" or action_type == "快捷键":
-            keys = action.get("keys", [])
+            keys = action.get("key").split("+")
             if keys:
                 return self.hotkey(*keys)
                 
