@@ -9,60 +9,11 @@ from executor import Executor
 import config
 
 
-def extract_json(text: str) -> list | None:
-    """Extract JSON objects that contain an "action" or a "plan" key from text.
-
-    This helper is used to decode the model's responses which may include
-    actionable instructions ("action") and/or an accompanying high-level plan
-    ("plan").
-    """
-    results = []
-    # 优化正则表达式，确保能匹配独立的JSON对象
-    patterns = [
-        r'```json\s*(\{[\s\S]*?\})\s*```',  # 匹配带json标记的代码块
-        r'```\s*(\{[\s\S]*?\})\s*```',  # 匹配不带json标记的代码块
-        r'(\{[\s\S]*?"action"[\s\S]*?\})',  # 匹配包含action的JSON对象
-        r'(\{[\s\S]*?"plan"[\s\S]*?\})',  # 匹配包含plan的JSON对象
-    ]
-
-    # 先去除文本两端的空白字符，避免干扰匹配
-    text = text.strip()
-
-    for pattern in patterns:
-        matches = re.finditer(pattern, text, re.DOTALL)
-        for match in matches:
-            try:
-                # 获取匹配到的JSON字符串
-                json_str = match.group(1).strip()
-                # 解析JSON字符串
-                obj = json.loads(json_str)
-                # 验证是否是字典且包含指定key
-                if isinstance(obj, dict) and ("action" in obj or "plan" in obj):
-                    # 避免重复添加相同的JSON对象
-                    if obj not in results:
-                        results.append(obj)
-            except (json.JSONDecodeError, IndexError):
-                # 解析失败时跳过该匹配项，继续处理下一个
-                continue
-
-    # 如果没有匹配到结果，检查文本本身是否就是一个合法的JSON对象
-    if not results:
-        try:
-            obj = json.loads(text)
-            if isinstance(obj, dict) and ("action" in obj or "plan" in obj):
-                results.append(obj)
-        except json.JSONDecodeError:
-            pass
-    if not results:
-        raise Exception("解析异常，需重新生成指令json")
-
-    return results
 
 
 
 
-
-SYSTEM_PROMPT = SYSTEM_PROMPT = """你是一个Windows桌面自动化助手。你已经收到屏幕截图，请直接分析内容并返回操作指令。"""
+SYSTEM_PROMPT = SYSTEM_PROMPT = """你是一个Windows桌面自动化助手。你已经收到屏幕截图，请直接分析内容并执行操作指令。"""
 
 CLIENT = None
 
@@ -242,6 +193,8 @@ def analyze_with_image(client: OpenAI, user_prompt: str, image_path: str | None 
                 log_callback("任务完成", "response")
                 return "任务完成"
             current_messages.append({"role": "function", "name": fname, "content": str(result)})
+            current_screenshot = executor.screenshot()
+            current_messages.append({"role": "user", "content": [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encode_image(current_screenshot)}"}}]})
             continue
         else:
             raise  Exception("未知的响应类型")
@@ -258,11 +211,7 @@ class Agent:
         self.conversation_history = []
         self.iteration = 0
         self.max_iterations = config.MAX_ITERATIONS
-        
-    def add_to_history(self, role: str, content):
-        self.conversation_history.append({"role": role, "content": content})
-        if len(self.conversation_history) > 20:
-            self.conversation_history = self.conversation_history[-20:]
+
     
     def run(self, task: str, log_callback=None) -> str:
         self.iteration = 0
