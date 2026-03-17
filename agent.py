@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pyautogui
 from openai import OpenAI
+from openai.types.chat import ChatCompletionMessage
+
 from executor import Executor
 import config
 
@@ -130,10 +132,14 @@ def request_llm_with_functions(client: OpenAI, messages: list, functions: list)-
         extra_body={"enable_thinking": False}
     )
     resp = response.choices[0].message
-    if isinstance(resp, dict) and resp.get("function_call"):
-        return {"function_call": resp["function_call"]}
-    else:
-        return {"content": resp.get("content")}
+    # 解析function_call,不同的大模型返回的字段可能不一样
+
+    if config.MODEL_NAME=="glm-5":
+        if isinstance(resp, ChatCompletionMessage):
+            if hasattr(resp,"tool_calls"):
+                function_call={"name":resp.tool_calls[0].function.name,"arguments":resp.tool_calls[0].function.arguments}
+
+    return {"function_call": function_call}
 
 def execute_function_call(fname: str, args: dict, executor: Executor)->str:
     action = {"action": fname}
@@ -214,7 +220,6 @@ class Agent:
 
     
     def run(self, task: str, log_callback=None) -> str:
-        self.iteration = 0
         
         llm_client = get_llm_client()
         
