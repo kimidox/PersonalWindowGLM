@@ -218,5 +218,7 @@ class Executor:
         
         elif action_type == "return_to_desktop" or action_type == "返回桌面":
             return self.return_to_desktop()
+        elif action_type == "over" or action_type == "完成":
+            return "任务完成"
         
         return f"Unknown action: {action}"
