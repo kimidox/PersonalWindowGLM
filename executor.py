@@ -54,47 +54,36 @@ def get_primary_monitor_info() -> dict:
     }
 
 
-def translate_x_y_to_screen_coord(x: int, y: int) -> tuple:
+def translate_x_y_to_screen_coord(norm_x: float, norm_y: float) -> tuple:
     """
-    将千分比坐标(x, y)（0-999）映射到实际屏幕像素坐标。
-    基准坐标为 1920x1200 的逻辑坐标，考虑实际主显示器分辨率和 DPI 缩放。
-
-    参数:
-        x: 水平方向千分比 (0-999)
-        y: 垂直方向千分比 (0-999)
-
-    返回:
-        tuple: (屏幕像素X坐标, 屏幕像素Y坐标)
+    将归一化坐标（0.0~1.0）转换为实际屏幕的像素坐标
+    :param norm_x: 归一化水平坐标（0.0 ≤ norm_x ≤ 1.0）
+    :param norm_y: 归一化垂直坐标（0.0 ≤ norm_y ≤ 1.0）
+    :return: 实际屏幕像素坐标 (screen_x, screen_y)
+    :raises TypeError: 输入非浮点/整数类型时触发
+    :raises ValueError: 输入超出0.0~1.0范围时触发
     """
-    # 校验输入范围
-    if not (0 <= x <= 999) or not (0 <= y <= 999):
-        raise ValueError(f"x和y必须是0-999之间的整数，当前输入：x={x}, y={y}")
+    # 步骤1：输入校验（适配归一化坐标的浮点特性）
+    if not isinstance(norm_x, (int, float)) or not isinstance(norm_y, (int, float)):
+        raise TypeError("归一化坐标x和y必须为数字类型（整数/浮点数）")
+    if not (0.0 <= norm_x <= 1.0) or not (0.0 <= norm_y <= 1.0):
+        raise ValueError("归一化坐标必须在0.0~1.0范围内")
 
+    # 步骤2：获取屏幕信息
     info = get_primary_monitor_info()
     screen_width = info["width"]
     screen_height = info["height"]
-    base_w, base_h = 1920, 1200
 
-    # 步骤1：将千分比转换为基准逻辑坐标（1920x1200）的绝对坐标
-    base_x = (x / 999) * base_w
-    base_y = (y / 999) * base_h
+    # 步骤3：计算实际屏幕像素坐标（核心修改：基于屏幕尺寸直接缩放）
+    # 归一化坐标 × 屏幕实际尺寸 = 像素坐标
+    screen_x = round(norm_x * screen_width)
+    screen_y = round(norm_y * screen_height)
 
-    # 步骤2：计算缩放比例（考虑DPI缩放）
-    # scale_w = (screen_width / base_w) * info.get("scale_x", 1.0)
-    # scale_h = (screen_height / base_h) * info.get("scale_y", 1.0)
-
-    scale_w = (screen_width / base_w) * 1.0
-    scale_h = (screen_height / base_h) * 1.0
-
-    # 步骤3：转换为实际屏幕像素坐标
-    screen_x = round(base_x * scale_w)
-    screen_y = round(base_y * scale_h)
-
-    # 边界保护（确保坐标在屏幕范围内）
+    # 步骤4：边界保护（确保坐标在屏幕有效范围内）
     screen_x = max(0, min(screen_x, screen_width - 1))
     screen_y = max(0, min(screen_y, screen_height - 1))
 
-    print(f"转换后的坐标：x={screen_x}, y={screen_y} (原千分比 x={x}, y={y})")
+    print(f"转换后的屏幕像素坐标：x={screen_x}, y={screen_y}, 原始归一化坐标：({norm_x}, {norm_y})")
     return (screen_x, screen_y)
 
 class Executor:

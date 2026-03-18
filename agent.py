@@ -40,8 +40,18 @@ def build_functions():
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "x": {"type": "integer"},
-                    "y": {"type": "integer"},
+                    "x": {
+                        "type": "integer",
+                        "description": "Horizontal coordinate (normalized), value range: 0.0-1.0",
+                        "minimum": 0.0,
+                        "maximum": 1.0
+                    },
+                    "y": {
+                        "type": "integer",
+                        "description": "Vertical coordinate (normalized), value range: 0.0-1.0",
+                        "minimum": 0.0,
+                        "maximum": 1.0
+                    },
                     "button": {"type": "string"}
                 },
                 "required": ["x", "y"]
@@ -52,7 +62,21 @@ def build_functions():
             "description": "Double click at coordinates",
             "parameters": {
                 "type": "object",
-                "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}, "button": {"type": "string"}},
+                "properties": {
+                    "x": {
+                        "type": "integer",
+                        "description": "Horizontal coordinate (normalized), value range: 0.0-1.0",
+                        "minimum": 0.0,
+                        "maximum": 1.0
+                    },
+                    "y": {
+                        "type": "integer",
+                        "description": "Vertical coordinate (normalized), value range: 0.0-1.0",
+                        "minimum": 0.0,
+                        "maximum": 1.0
+                    },
+                    "button": {"type": "string"}
+                },
                 "required": ["x", "y"]
             },
         },
@@ -61,14 +85,42 @@ def build_functions():
             "description": "Right click at coordinates",
             "parameters": {
                 "type": "object",
-                "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+                "properties": {
+                    "x": {
+                        "type": "integer",
+                        "description": "Horizontal coordinate (normalized), value range: 0.0-1.0",
+                        "minimum": 0.0,
+                        "maximum": 1.0
+                    },
+                    "y": {
+                        "type": "integer",
+                        "description": "Vertical coordinate (normalized), value range: 0.0-1.0",
+                        "minimum": 0.0,
+                        "maximum": 1.0
+                    },
+                },
                 "required": ["x", "y"]
             },
         },
         {
             "name": "move_to",
             "description": "Move mouse to coordinates",
-            "parameters": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]},
+            "parameters": {
+                "type": "object",
+               "properties": {
+                "x": {
+                    "type": "integer",
+                    "description": "Horizontal coordinate (normalized), value range: 0.0-1.0",
+                    "minimum": 0.0,
+                    "maximum": 1.0
+                },
+                "y": {
+                    "type": "integer",
+                    "description": "Vertical coordinate (normalized), value range: 0.0-1.0",
+                    "minimum": 0.0,
+                    "maximum": 1.0
+                },
+                }, "required": ["x", "y"]},
         },
         {
             "name": "type_text",
@@ -92,8 +144,18 @@ def build_functions():
                 "type": "object",
                 "properties": {
                     "clicks": {"type": "integer"},
-                    "x": {"type": "integer"},
-                    "y": {"type": "integer"}
+                    "x": {
+                        "type": "integer",
+                        "description": "Horizontal coordinate (normalized), value range: 0.0-1.0",
+                        "minimum": 0.0,
+                        "maximum": 1.0
+                    },
+                    "y": {
+                        "type": "integer",
+                        "description": "Vertical coordinate (normalized), value range: 0.0-1.0",
+                        "minimum": 0.0,
+                        "maximum": 1.0
+                    },
                 },
                 "required": ["clicks"]
             },
