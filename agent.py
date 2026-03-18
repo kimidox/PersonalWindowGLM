@@ -262,6 +262,7 @@ def analyze_with_image(client: OpenAI, user_prompt: str, image_path: str | None 
                 return "任务完成"
             current_messages.append({"role": "function", "name": fname, "content": str(result)})
             current_screenshot = executor.screenshot()
+
             current_messages.append({"role": "user", "content": [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encode_image(current_screenshot)}"}}]})
             continue
         else:
