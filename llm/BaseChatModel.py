@@ -1,0 +1,176 @@
+from __future__ import annotations
+
+import base64
+import json
+from abc import ABC, abstractmethod
+from typing import Any, Callable, Optional
+
+from openai import OpenAI
+
+import config
+from executor import Executor
+
+
+class BaseChatModel(ABC):
+    """
+    模型无关的对话/工具调用封装。
+    让 `agent.py` 不再关心：
+    - OpenAI 兼容客户端如何创建
+    - 工具调用字段如何解析（tool_calls / function_call）
+    - 图像消息如何拼装
+    - 工具调用循环如何执行
+    """
+
+    def __init__(
+        self,
+        model_name: Optional[str] = None,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        temperature: float = 0.0,
+        extra_body: Optional[dict[str, Any]] = None,
+    ) -> None:
+        self.model_name = model_name or config.MODEL_NAME
+        self.api_key = api_key or config.OPENAI_API_KEY
+        self.base_url = base_url or config.OPENAI_BASE_URL
+        self.temperature = temperature
+        self.extra_body = extra_body if extra_body is not None else {"enable_thinking": False}
+        self._client: Optional[OpenAI] = None
+
+    def get_client(self) -> OpenAI:
+        if self._client is None:
+            self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        return self._client
+
+    @abstractmethod
+    def build_tools(self) -> list[dict]:
+        """返回工具 schema（用于 LLM tool/function call）。"""
+
+    def encode_image(self, image_path: str) -> str:
+        with open(image_path, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode("utf-8")
+
+    def extract_function_call(self, message: Any) -> Optional[dict[str, str]]:
+        """
+        尝试从模型输出中提取工具调用信息。
+        返回格式：{"name": ..., "arguments": "...json..."} 或 None
+        """
+
+        tool_calls = getattr(message, "tool_calls", None)
+        if not tool_calls:
+            return None
+
+        first = tool_calls[0]
+        func = getattr(first, "function", None)
+        if func is None:
+            return None
+
+        name = getattr(func, "name", None)
+        arguments = getattr(func, "arguments", None) or "{}"
+        if not name:
+            return None
+
+        return {"name": str(name), "arguments": str(arguments)}
+
+    def request_llm_with_tools(self, messages: list[dict], tools: list[dict]) -> Optional[dict[str, str]]:
+        response = self.get_client().chat.completions.create(
+            model=self.model_name,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            temperature=self.temperature,
+            extra_body=self.extra_body,
+        )
+        msg = response.choices[0].message
+        return self.extract_function_call(msg)
+
+    def execute_function_call(self, fname: str, args: dict, executor: Executor) -> str:
+        action = {"action": fname}
+        if args:
+            action.update(args)
+        return executor.execute_action(action)
+
+    def analyze_with_image(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        image_path: str | None = None,
+        conversation_history: list[dict] | None = None,
+        executor: Executor | None = None,
+        log_callback: Optional[Callable[[str, str], Any]] = None,
+    ) -> str:
+        """
+        负责：
+        1) 拼装系统+用户(含图像) messages
+        2) 循环请求模型 -> 解析 tool_call -> 执行本地动作 -> 将动作结果回填给模型
+        3) 遇到 "任务完成" 时返回
+        """
+
+        messages: list[dict] = [{"role": "system", "content": system_prompt}]
+
+        if conversation_history:
+            for msg in conversation_history:
+                messages.append(msg)
+
+        user_content: list[dict] = []
+        if user_prompt:
+            user_content.append({"type": "text", "text": user_prompt})
+
+        if image_path:
+            base64_image = self.encode_image(image_path)
+            user_content.append(
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
+            )
+
+        if user_content:
+            messages.append({"role": "user", "content": user_content})
+
+        tools = self.build_tools()
+        current_messages = list(messages)
+        executor = executor or Executor(".")
+
+        # 避免无限循环：达到 MAX_ITERATIONS 仍未结束则返回异常。
+        for _ in range(getattr(config, "MAX_ITERATIONS", 20)):
+            function_call = self.request_llm_with_tools(current_messages, tools)
+            if not function_call:
+                raise Exception("未知的响应类型（未发现 tool_calls）")
+
+            fname = function_call.get("name")
+            arg_str = function_call.get("arguments") or "{}"
+            try:
+                args = json.loads(arg_str)
+            except Exception:
+                args = {}
+
+            if log_callback:
+                log_callback(str({fname: {"args": args}}), "response")
+
+            result = self.execute_function_call(fname, args, executor)
+
+            if log_callback:
+                log_callback(str({fname: {"result": result}}), "response")
+
+            if result == "任务完成":
+                if log_callback:
+                    log_callback("任务完成", "response")
+                return "任务完成"
+
+            current_messages.append({"role": "tool", "name": fname, "content": str(result)})
+            current_screenshot = executor.screenshot()
+            current_messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{self.encode_image(current_screenshot)}"
+                            },
+                        }
+                    ],
+                }
+            )
+
+        if log_callback:
+            log_callback("任务异常", "response")
+        return "任务异常"
+
