@@ -58,21 +58,19 @@ class GLMChatModel(BaseChatModel):
              "parameters": {"type": "object", "properties": {}, "required": []}},
             {
                 "name": "click",
-                "description": "Click at coordinates",
+                "description": "Click at grid cell from screenshot overlay (gx, gy); cell center maps to screen pixels",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "x": {
                             "type": "integer",
-                            "description": "Horizontal coordinate (normalized), value range: 0.0-1.0",
-                            "minimum": 0.0,
-                            "maximum": 1.0
+                            "description": "Grid column index gx (0=left), must match screenshot grid labels",
+                            "minimum": 0
                         },
                         "y": {
                             "type": "integer",
-                            "description": "Vertical coordinate (normalized), value range: 0.0-1.0",
-                            "minimum": 0.0,
-                            "maximum": 1.0
+                            "description": "Grid row index gy (0=top), must match screenshot grid labels",
+                            "minimum": 0
                         },
                         "button": {"type": "string"}
                     },
@@ -81,21 +79,19 @@ class GLMChatModel(BaseChatModel):
             },
             {
                 "name": "double_click",
-                "description": "Double click at coordinates",
+                "description": "Double click at grid cell (gx, gy) from screenshot overlay",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "x": {
                             "type": "integer",
-                            "description": "Horizontal coordinate (normalized), value range: 0.0-1.0",
-                            "minimum": 0.0,
-                            "maximum": 1.0
+                            "description": "Grid column index gx (0=left)",
+                            "minimum": 0
                         },
                         "y": {
                             "type": "integer",
-                            "description": "Vertical coordinate (normalized), value range: 0.0-1.0",
-                            "minimum": 0.0,
-                            "maximum": 1.0
+                            "description": "Grid row index gy (0=top)",
+                            "minimum": 0
                         },
                         "button": {"type": "string"}
                     },
@@ -104,21 +100,19 @@ class GLMChatModel(BaseChatModel):
             },
             {
                 "name": "right_click",
-                "description": "Right click at coordinates",
+                "description": "Right click at grid cell (gx, gy) from screenshot overlay",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "x": {
                             "type": "integer",
-                            "description": "Horizontal coordinate (normalized), value range: 0.0-1.0",
-                            "minimum": 0.0,
-                            "maximum": 1.0
+                            "description": "Grid column index gx (0=left)",
+                            "minimum": 0
                         },
                         "y": {
                             "type": "integer",
-                            "description": "Vertical coordinate (normalized), value range: 0.0-1.0",
-                            "minimum": 0.0,
-                            "maximum": 1.0
+                            "description": "Grid row index gy (0=top)",
+                            "minimum": 0
                         },
                     },
                     "required": ["x", "y"]
@@ -126,21 +120,19 @@ class GLMChatModel(BaseChatModel):
             },
             {
                 "name": "move_to",
-                "description": "Move mouse to coordinates",
+                "description": "Move mouse to grid cell center (gx, gy) from screenshot overlay",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "x": {
                             "type": "integer",
-                            "description": "Horizontal coordinate (normalized), value range: 0.0-1.0",
-                            "minimum": 0.0,
-                            "maximum": 1.0
+                            "description": "Grid column index gx (0=left)",
+                            "minimum": 0
                         },
                         "y": {
                             "type": "integer",
-                            "description": "Vertical coordinate (normalized), value range: 0.0-1.0",
-                            "minimum": 0.0,
-                            "maximum": 1.0
+                            "description": "Grid row index gy (0=top)",
+                            "minimum": 0
                         },
                     }, "required": ["x", "y"]},
             },
@@ -161,22 +153,20 @@ class GLMChatModel(BaseChatModel):
             },
             {
                 "name": "scroll",
-                "description": "Scroll",
+                "description": "Scroll; optional gx, gy to scroll at that grid cell center",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "clicks": {"type": "integer"},
                         "x": {
                             "type": "integer",
-                            "description": "Horizontal coordinate (normalized), value range: 0.0-1.0",
-                            "minimum": 0.0,
-                            "maximum": 1.0
+                            "description": "Optional grid column gx if scrolling at a cell",
+                            "minimum": 0
                         },
                         "y": {
                             "type": "integer",
-                            "description": "Vertical coordinate (normalized), value range: 0.0-1.0",
-                            "minimum": 0.0,
-                            "maximum": 1.0
+                            "description": "Optional grid row gy if scrolling at a cell",
+                            "minimum": 0
                         },
                     },
                     "required": ["clicks"]

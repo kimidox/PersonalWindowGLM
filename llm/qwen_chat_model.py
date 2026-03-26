@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from .BaseChatModel import BaseChatModel
 
@@ -39,21 +39,19 @@ class QwenChatModel(BaseChatModel):
                 "type": "function",
                 "function": {
                     "name": "click",
-                    "description": "Click at coordinates",
+                    "description": "Click at grid cell (gx, gy) shown on screenshot overlay; maps to cell center in screen pixels",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "x": {
                                 "type": "number",
-                                "description": "Horizontal coordinate (normalized), value range: 0.0-1.0",
-                                "minimum": 0.0,
-                                "maximum": 1.0
+                                "description": "Grid column index gx (0=left), non-negative integer",
+                                "minimum": 0
                             },
                             "y": {
                                 "type": "number",
-                                "description": "Vertical coordinate (normalized), value range: 0.0-1.0",
-                                "minimum": 0.0,
-                                "maximum": 1.0
+                                "description": "Grid row index gy (0=top), non-negative integer",
+                                "minimum": 0
                             },
                             "button": {
                                 "type": "string",
@@ -69,21 +67,19 @@ class QwenChatModel(BaseChatModel):
                 "type": "function",
                 "function": {
                     "name": "double_click",
-                    "description": "Double click at coordinates",
+                    "description": "Double click at grid cell (gx, gy) from screenshot overlay",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "x": {
                                 "type": "number",
-                                "description": "Horizontal coordinate (normalized), value range: 0.0-1.0",
-                                "minimum": 0.0,
-                                "maximum": 1.0
+                                "description": "Grid column index gx (0=left)",
+                                "minimum": 0
                             },
                             "y": {
                                 "type": "number",
-                                "description": "Vertical coordinate (normalized), value range: 0.0-1.0",
-                                "minimum": 0.0,
-                                "maximum": 1.0
+                                "description": "Grid row index gy (0=top)",
+                                "minimum": 0
                             },
                             "button": {
                                 "type": "string",
@@ -99,21 +95,19 @@ class QwenChatModel(BaseChatModel):
                 "type": "function",
                 "function": {
                     "name": "right_click",
-                    "description": "Right click at coordinates",
+                    "description": "Right click at grid cell (gx, gy) from screenshot overlay",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "x": {
                                 "type": "number",
-                                "description": "Horizontal coordinate (normalized), value range: 0.0-1.0",
-                                "minimum": 0.0,
-                                "maximum": 1.0
+                                "description": "Grid column index gx (0=left)",
+                                "minimum": 0
                             },
                             "y": {
                                 "type": "number",
-                                "description": "Vertical coordinate (normalized), value range: 0.0-1.0",
-                                "minimum": 0.0,
-                                "maximum": 1.0
+                                "description": "Grid row index gy (0=top)",
+                                "minimum": 0
                             }
                         },
                         "required": ["x", "y"]
@@ -124,21 +118,19 @@ class QwenChatModel(BaseChatModel):
                 "type": "function",
                 "function": {
                     "name": "move_to",
-                    "description": "Move mouse to coordinates",
+                    "description": "Move mouse to grid cell center (gx, gy) from screenshot overlay",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "x": {
                                 "type": "number",
-                                "description": "Horizontal coordinate (normalized), value range: 0.0-1.0",
-                                "minimum": 0.0,
-                                "maximum": 1.0
+                                "description": "Grid column index gx (0=left)",
+                                "minimum": 0
                             },
                             "y": {
                                 "type": "number",
-                                "description": "Vertical coordinate (normalized), value range: 0.0-1.0",
-                                "minimum": 0.0,
-                                "maximum": 1.0
+                                "description": "Grid row index gy (0=top)",
+                                "minimum": 0
                             }
                         },
                         "required": ["x", "y"]
@@ -200,7 +192,7 @@ class QwenChatModel(BaseChatModel):
                 "type": "function",
                 "function": {
                     "name": "scroll",
-                    "description": "Scroll mouse wheel at specified coordinates",
+                    "description": "Scroll mouse wheel; optional gx, gy to scroll at that grid cell",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -210,15 +202,13 @@ class QwenChatModel(BaseChatModel):
                             },
                             "x": {
                                 "type": "number",
-                                "description": "Horizontal coordinate (normalized), value range: 0.0-1.0",
-                                "minimum": 0.0,
-                                "maximum": 1.0
+                                "description": "Optional grid column gx",
+                                "minimum": 0
                             },
                             "y": {
                                 "type": "number",
-                                "description": "Vertical coordinate (normalized), value range: 0.0-1.0",
-                                "minimum": 0.0,
-                                "maximum": 1.0
+                                "description": "Optional grid row gy",
+                                "minimum": 0
                             }
                         },
                         "required": ["clicks"]
@@ -283,3 +273,35 @@ class QwenChatModel(BaseChatModel):
                 }
             }
         ]
+    def extract_function_call(self, message: Any) -> Optional[dict[str, str]]:
+        """
+        尝试从模型输出中提取工具调用信息。
+        返回格式：{"name": ..., "arguments": "...json..."} 或 None
+        """
+
+        tool_calls = getattr(message, "tool_calls", None)
+        if not tool_calls:
+            return None
+
+        first = tool_calls[0]
+        func = getattr(first, "function", None)
+        if func is None:
+            return None
+
+        name = getattr(func, "name", None)
+        arguments = getattr(func, "arguments", None) or "{}"
+        if not name:
+            return None
+
+        return {"name": str(name), "arguments": str(arguments)}
+    def request_llm_with_tools(self, messages: list[dict], tools: list[dict]) -> Optional[dict[str, str]]:
+        response = self.get_client().chat.completions.create(
+            model=self.model_name,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            temperature=self.temperature,
+            extra_body=self.extra_body,
+        )
+        msg = response.choices[0].message
+        return self.extract_function_call(msg)
