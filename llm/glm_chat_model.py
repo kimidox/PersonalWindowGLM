@@ -26,27 +26,17 @@ class GLMChatModel(BaseChatModel):
         )
         msg = response.choices[0].message
         return self.extract_function_call(msg)
-    def extract_function_call(self, message: Any) -> Optional[dict[str, str]]:
-        """
-        尝试从模型输出中提取工具调用信息。
-        返回格式：{"name": ..., "arguments": "...json..."} 或 None
-        """
 
-        tool_calls = getattr(message, "tool_calls", None)
-        if not tool_calls:
-            return None
-
-        first = tool_calls[0]
-        func = getattr(first, "function", None)
-        if func is None:
-            return None
-
-        name = getattr(func, "name", None)
-        arguments = getattr(func, "arguments", None) or "{}"
-        if not name:
-            return None
-
-        return {"name": str(name), "arguments": str(arguments)}
+    def complete_with_tools(self, messages: list[dict], tools: list[dict]) -> Any:
+        response = self.get_client().chat.completions.create(
+            model=self.model_name,
+            messages=messages,
+            functions=tools,
+            function_call="auto",
+            temperature=self.temperature,
+            extra_body=self.extra_body,
+        )
+        return response.choices[0].message
 
     def build_tools(self) -> list[dict]:
         return self.build_functions()

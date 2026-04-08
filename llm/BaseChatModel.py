@@ -56,20 +56,37 @@ class BaseChatModel(ABC):
         """
 
         tool_calls = getattr(message, "tool_calls", None)
-        if not tool_calls:
-            return None
+        if tool_calls:
+            first = tool_calls[0]
+            func = getattr(first, "function", None)
+            if func is None:
+                return None
+            name = getattr(func, "name", None)
+            arguments = getattr(func, "arguments", None) or "{}"
+            if not name:
+                return None
+            return {"name": str(name), "arguments": str(arguments)}
 
-        first = tool_calls[0]
-        func = getattr(first, "function", None)
-        if func is None:
-            return None
+        legacy = getattr(message, "function_call", None)
+        if legacy is not None:
+            name = getattr(legacy, "name", None)
+            arguments = getattr(legacy, "arguments", None) or "{}"
+            if name:
+                return {"name": str(name), "arguments": str(arguments)}
 
-        name = getattr(func, "name", None)
-        arguments = getattr(func, "arguments", None) or "{}"
-        if not name:
-            return None
+        return None
 
-        return {"name": str(name), "arguments": str(arguments)}
+    def complete_with_tools(self, messages: list[dict], tools: list[dict]) -> Any:
+        """发起一次带 tools 的补全，返回 choices[0].message。"""
+        response = self.get_client().chat.completions.create(
+            model=self.model_name,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            temperature=self.temperature,
+            extra_body=self.extra_body,
+        )
+        return response.choices[0].message
 
     def request_llm_with_tools(self, messages: list[dict], tools: list[dict]) -> Optional[dict[str, str]]:
         response = self.get_client().chat.completions.create(

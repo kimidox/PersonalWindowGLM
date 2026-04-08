@@ -1,0 +1,20 @@
+from __future__ import annotations
+
+from .context import ToolContext
+from .definitions import ATOMIC_TOOL_DEFINITIONS
+from .dispatch import execute_atomic_tool
+from .schema import tools_for_model
+
+
+def all_definition_dicts() -> list[dict]:
+    """供 Skill 侧与 Agent 侧合并工具 schema 时使用的原子工具定义（canonical）。"""
+    return list(ATOMIC_TOOL_DEFINITIONS)
+
+
+__all__ = [
+    "ToolContext",
+    "ATOMIC_TOOL_DEFINITIONS",
+    "execute_atomic_tool",
+    "tools_for_model",
+    "all_definition_dicts",
+]
