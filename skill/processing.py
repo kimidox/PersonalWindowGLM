@@ -16,6 +16,7 @@ def summarize_skill(s: SkillDefinition) -> str:
 <id>{s.skill_id}</id>
 <name>{s.name}</name>
 <desc>{desc}</desc>
+<dir>{s.relative_path}</dir>
 </Skill>
 """
     return res
