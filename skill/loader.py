@@ -31,6 +31,31 @@ def _parse_simple_frontmatter(raw: str) -> tuple[dict[str, str], str]:
     return meta, body
 
 
+def resolve_skill_markdown_in_package(package_dir: Path) -> Path | None:
+    """
+    在单个 Skill 包目录（一层子文件夹）内解析要加载的 Markdown 路径。
+    优先级：
+    1) 与同文件夹名一致的 `<文件夹名>.md` / `.markdown`
+    2) 该目录下按文件名的第一个 `.md` / `.markdown`（仅当前目录，不递归子目录）
+    """
+    if not package_dir.is_dir():
+        return None
+    name = package_dir.name
+    for ext in (".md", ".markdown"):
+        preferred = package_dir / f"{name}{ext}"
+        if preferred.is_file():
+            return preferred
+    md_files = sorted(
+        (
+            p
+            for p in package_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in (".md", ".markdown")
+        ),
+        key=lambda p: p.name.lower(),
+    )
+    return md_files[0] if md_files else None
+
+
 def load_skill_from_path(path: Path) -> SkillDefinition:
     raw = path.read_text(encoding="utf-8", errors="replace")
     meta, body = _parse_simple_frontmatter(raw)
@@ -49,12 +74,23 @@ def load_skill_from_path(path: Path) -> SkillDefinition:
 
 
 def discover_skill_files(skills_dir: Path) -> list[Path]:
+    """
+    扫描 Skills 根目录：
+    - 每个**一级子文件夹**视为一个 Skill 包，在其中解析主 .md（见 resolve_skill_markdown_in_package）；
+    - 若根目录下仍有独立的 .md / .markdown / .txt，也会加载（兼容旧版平铺结构）。
+    """
     if not skills_dir.is_dir():
         return []
     paths: list[Path] = []
-    for p in sorted(skills_dir.iterdir()):
-        if p.is_file() and p.suffix.lower() in (".md", ".markdown", ".txt"):
-            paths.append(p)
+    for child in sorted(skills_dir.iterdir(), key=lambda p: p.name.lower()):
+        if child.name.startswith("."):
+            continue
+        if child.is_dir():
+            md = resolve_skill_markdown_in_package(child)
+            if md is not None:
+                paths.append(md)
+        elif child.is_file() and child.suffix.lower() in (".md", ".markdown", ".txt"):
+            paths.append(child)
     return paths
 
 

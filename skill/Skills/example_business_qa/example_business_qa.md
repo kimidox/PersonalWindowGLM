@@ -1,5 +1,5 @@
 ---
-id: 1
+id: example_business_qa
 name: 业务问答示例
 description: 用户提出一般业务分析或说明类问题时，先澄清目标再分步回答；需要文件证据时用 read_text_file。
 ---
