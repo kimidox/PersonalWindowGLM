@@ -20,8 +20,6 @@ from skill import (
 )
 
 
-def _default_skills_dir() -> Path:
-    return Path(__file__).resolve().parent / "skill" / "Skills"
 
 
 def _message_text(message: Any) -> str:
@@ -37,7 +35,7 @@ def _build_system_prompt(catalog: str) -> str:
 {catalog}
 
 ## 工具使用约定
-0. 部分 Skill 可能已在每轮开头由系统按 `auto_load` 或 **description 触发短语**（用 、，等分隔）自动注入，须遵守；若仍需其它 Skill，可再 `select_skill`（已自动加载的 id 再选不会重复追加）。
+0. 部分Skill里面描述中若说明仍需其它 Skill，可再 `select_skill`（已自动加载的 id 再选不会重复追加）。
 1. 按需调用 `select_skill` 加载 Skill 全文（可加载一个或多个）。若用户任务明显需要多套规范，请依次 `select_skill`；下文会同时列出本轮已加载的全部 Skill，须一并遵守（若有冲突，以更具体或后加载的说明为准）。
 2. 执行过程中使用原子工具（读写文件、列目录、桌面自动化等）完成具体操作；桌面自动化通过 `execute_desktop_action` 传入单个动作的 JSON 字符串。
 3. 当你认为已满足用户目标时，调用 `finish`，在参数 `message` 中给出完整、用户可读的最终答复。
@@ -55,7 +53,7 @@ class SkillAgent:
         executor: Executor | None = None,
     ) -> None:
         self.work_dir = str(Path(work_dir).resolve())
-        sd = skills_dir if skills_dir is not None else _default_skills_dir()
+        sd = skills_dir if skills_dir is not None else config.SKILLS_DIR
         self.registry = SkillRegistry(sd)
         self.max_steps = int(max_steps if max_steps is not None else config.SKILL_AGENT_MAX_STEPS)
         self.executor = executor
@@ -96,38 +94,6 @@ class SkillAgent:
         ]
         active_skill_text: list[str] = []
         active_skill_ids: list[str] = []
-
-        if getattr(config, "SKILL_AGENT_AUTO_LOAD", True):
-            auto_skills = skills_auto_matched_for_query(self.registry.list_skills(), user_query.strip())
-            for s in auto_skills:
-                doc = format_skill_for_prompt(s)
-                active_skill_text.append(doc)
-                active_skill_ids.append(str(s.skill_id).strip())
-            if auto_skills:
-                parts = [
-                    f"### 自动加载 Skill #{i + 1}（id：`{s.skill_id}`）\n\n{t.strip()}"
-                    for i, (s, t) in enumerate(zip(auto_skills, active_skill_text))
-                ]
-                merged_auto = "\n\n---\n\n".join(parts)
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "以下 Skill 已由系统根据 `auto_load` 或 **description** 与用户问题的匹配规则 "
-                            "自动加载，须与后续通过 `select_skill` 追加的文档一并遵守：\n\n" + merged_auto
-                        ),
-                    }
-                )
-                if log_callback:
-                    ids_join = "、".join(active_skill_ids)
-                    log_callback(
-                        f"自动命中 Skill（规则）｜id：{ids_join}（共 {len(auto_skills)} 个）",
-                        "tool",
-                    )
-                    log_callback(
-                        "［自动加载的 Skill 文档汇总］\n\n" + merged_auto,
-                        "doc",
-                    )
 
         for step in range(self.max_steps):
             msg = model.complete_with_tools(messages, tools)

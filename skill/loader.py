@@ -68,7 +68,7 @@ def load_skill_from_path(path: Path) -> SkillDefinition:
         name=name,
         description=description,
         body=body.strip(),
-        source_path=path.resolve(),
+        relative_path=path.relative_to(Path.cwd()),
         extra_meta=extra,
     )
 

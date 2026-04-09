@@ -12,5 +12,5 @@ class SkillDefinition:
     name: str
     description: str
     body: str
-    source_path: Path | None = None
+    relative_path: Path | None = None
     extra_meta: dict[str, str] = field(default_factory=dict)

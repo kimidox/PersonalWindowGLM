@@ -47,6 +47,7 @@ def execute_skill_control_tool(
     should_terminate 为 True 且 final_user_message 非空时表示正常结束。
     """
     if name == "select_skill":
+        print(f"select_skill: {args}")
         sid = normalize_skill_id(str(args.get("skill_id", "")))
         if sid in active_skill_ids:
             i = active_skill_ids.index(sid)

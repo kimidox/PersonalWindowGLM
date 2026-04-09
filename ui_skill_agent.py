@@ -73,7 +73,7 @@ def _plain_block_html(text: str) -> str:
 class SkillAgentMainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.work_dir = os.path.dirname(os.path.abspath(__file__))
+        self.work_dir = config.WORKER_DIR
         self.executor = Executor(self.work_dir)
         self.skill_agent = SkillAgent(self.work_dir, executor=self.executor)
         self.worker_thread: SkillAgentWorkerThread | None = None

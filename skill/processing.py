@@ -77,7 +77,7 @@ def skills_auto_matched_for_query(skills: list[SkillDefinition], user_query: str
     q = (user_query or "").strip().lower()
     ordered = sorted(
         skills,
-        key=lambda s: (str(s.source_path or ""), normalize_skill_id(s.skill_id)),
+        key=lambda s: (str(s.relative_path or ""), normalize_skill_id(s.skill_id)),
     )
     seen: set[str] = set()
     always: list[SkillDefinition] = []
