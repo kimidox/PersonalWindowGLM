@@ -39,8 +39,8 @@ def _build_system_prompt(catalog: str) -> str:
 ## 工具使用约定
 0. 部分Skill里面描述中若说明仍需其它 Skill，可再 `select_skill`（已自动加载的 id 再选不会重复追加）。
 1. 按需调用 `select_skill` 加载 Skill 全文（可加载一个或多个）。若用户任务明显需要多套规范，请依次 `select_skill`；下文会同时列出本轮已加载的全部 Skill，须一并遵守（若有冲突，以更具体或后加载的说明为准）。
-2. 执行过程中使用原子工具（读写文件、列目录、桌面自动化等）完成具体操作；桌面自动化通过 `execute_desktop_action` 传入单个动作的 JSON 字符串。
-4. 部分Skill的md文件里面描述若说明仍需要读取相对路径下的文件时，需要调用原子工具-读写文件，传入的Path要拼接上当前Skill的dir。
+2. 执行过程中使用原子工具（读文件、写文件、列目录、桌面自动化等）完成具体操作；桌面自动化通过 `execute_desktop_action` 传入单个动作的 JSON 字符串。
+4. 部分Skill的md文件里面描述若说明仍需要读取相对路径下的文件时，需要调用原子工具-读文件，传入的Path要拼接上该相对路径所属的Skill的dir；同一输出文件最多写入一次，除非用户要求修改
 4. 当你认为已满足用户目标时，调用 `finish`，在参数 `message` 中给出完整、用户可读的最终答复。
 5. 若当前没有可用 Skill，可直接用原子工具与常识完成用户请求，并 `finish` 结束。
 """
@@ -120,6 +120,7 @@ class SkillAgent:
     def _persist_after_tool_turn(
         self,
         fname: str,
+        args:dict,
         result: str,
         active_skill_text: list[str],
         active_skill_ids: list[str],
@@ -127,10 +128,11 @@ class SkillAgent:
     ) -> None:
         assert self.memory is not None
         cid = self._conversation_id
+        args_str=json.dumps(args, ensure_ascii=False, indent=2)
         if fname == "select_skill":
-            self.memory.append_message(cid, "tool", str(result), metadata={"type":"skill","name": fname})
+            self.memory.append_message(cid, "tool", str(result), metadata={"type":"skill","name": fname,"args":args_str})
         else:
-            self.memory.append_message(cid, "tool", str(result), metadata={"type":"base_tool","name": fname})
+            self.memory.append_message(cid, "tool", str(result), metadata={"type":"base_tool","name": fname,"args":args_str})
         messages.append({"role": "tool", "name": fname, "content": str(result)})
         if fname == "select_skill" and active_skill_text and not str(result).startswith("错误"):
             self.memory.set_active_skills(cid, list(active_skill_ids))
@@ -228,7 +230,7 @@ class SkillAgent:
                 return final
 
             if self.memory is not None:
-                self._persist_after_tool_turn(fname, str(result), active_skill_text, active_skill_ids, messages)
+                self._persist_after_tool_turn(fname, args,str(result), active_skill_text, active_skill_ids, messages)
             else:
                 messages.append({"role": "tool", "name": fname, "content": str(result)})
                 if fname == "select_skill" and active_skill_text and not str(result).startswith("错误"):

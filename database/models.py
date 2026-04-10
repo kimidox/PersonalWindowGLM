@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, String, Integer, TIMESTAMP, JSON, Text
+from sqlalchemy import Column, String, Integer, TIMESTAMP, JSON, Text, UnicodeText
 
 from database import Base, engine
 from database.utils import get_local_time
@@ -33,7 +33,9 @@ class Messages(Base):
     message_id = Column(String, unique=True, index=True)
     conversation_id = Column(String, index=True)
     role = Column(String)
+
     content = Column(Text)
+    # 使用json,使用UnicodeText 是因为我要看数据库内容
     ext=Column(JSON)
     created_at = Column(TIMESTAMP, default=get_local_time())
     updated_at = Column(TIMESTAMP, default=get_local_time())
