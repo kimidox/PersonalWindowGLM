@@ -43,6 +43,8 @@ SKILLS_DIR=os.path.join(WORKER_DIR,str(get_config("SKILLS_DIR")))
 # 为 False 时：不在每轮开头按 auto_load / description 匹配自动注入 Skill（仅依赖模型 select_skill）。
 _auto_load = get_config("SKILL_AGENT_AUTO_LOAD")
 SKILL_AGENT_AUTO_LOAD = _env_bool(_auto_load, True)
+DEFAULT_SKILL_AGENT_USER = get_config("DEFAULT_SKILL_AGENT_USER")
+
 
 _gs = get_config("SCREENSHOT_GRID_STEP_PX")
 try:

@@ -1,25 +1,23 @@
 from __future__ import annotations
 
+import json
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
-
-import json
 
 import config
 from base_tool import ToolContext, all_definition_dicts, execute_atomic_tool, tools_for_model
 from executor import Executor
 from llm import get_chat_model
 from llm.BaseChatModel import BaseChatModel
+from memory import Memory
 from skill import (
     SkillRegistry,
     build_skills_catalog_text,
     execute_skill_control_tool,
-    format_skill_for_prompt,
     skills_auto_matched_for_query,
     SKILL_CONTROL_TOOL_DEFINITIONS,
 )
-
-
 
 
 def _message_text(message: Any) -> str:
@@ -27,6 +25,10 @@ def _message_text(message: Any) -> str:
     if isinstance(c, str) and c.strip():
         return c.strip()
     return ""
+
+
+def _history_without_system(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [m for m in messages if m.get("role") != "system"]
 
 
 def _build_system_prompt(catalog: str) -> str:
@@ -52,14 +54,27 @@ class SkillAgent:
         skills_dir: str | Path | None = None,
         max_steps: int | None = None,
         executor: Executor | None = None,
+        memory: Memory | None = None,
+        conversation_id: str | None = None,
+        username: str ,
     ) -> None:
         self.work_dir = str(Path(work_dir).resolve())
         sd = skills_dir if skills_dir is not None else config.SKILLS_DIR
         self.registry = SkillRegistry(sd)
         self.max_steps = int(max_steps if max_steps is not None else config.SKILL_AGENT_MAX_STEPS)
         self.executor = executor
+        self.memory = memory
+        self.username = username
+        if memory is not None:
+            self._conversation_id = conversation_id or str(uuid.uuid4())
+        else:
+            self._conversation_id = conversation_id or ""
         self._tool_ctx = ToolContext(work_dir=self.work_dir, executor=executor)
         self._definitions = list(SKILL_CONTROL_TOOL_DEFINITIONS) + list(all_definition_dicts())
+
+    @property
+    def conversation_id(self) -> str:
+        return self._conversation_id
 
     def reload_skills(self) -> None:
         self.registry.reload()
@@ -84,17 +99,67 @@ class SkillAgent:
             )
         return (execute_atomic_tool(name, args, self._tool_ctx), False, None)
 
+    def _append_model_messages(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        system_prompt: str,
+        user_query: str,
+    ) -> None:
+        """从 Memory 恢复历史（不含 system），再追加本轮用户输入；system 始终用当前 catalog 现算。"""
+        assert self.memory is not None
+        cid = self._conversation_id
+        self.memory.set_active_skills(cid, [])
+        prior = _history_without_system(self.memory.get_messages(cid))
+        messages.clear()
+        messages.append({"role": "system", "content": system_prompt})
+        messages.extend(prior)
+        self.memory.append_message(cid, "user", user_query.strip())
+        messages.append({"role": "user", "content": user_query.strip()})
+
+    def _persist_after_tool_turn(
+        self,
+        fname: str,
+        result: str,
+        active_skill_text: list[str],
+        active_skill_ids: list[str],
+        messages: list[dict[str, Any]],
+    ) -> None:
+        assert self.memory is not None
+        cid = self._conversation_id
+        if fname == "select_skill":
+            self.memory.append_message(cid, "tool", str(result), metadata={"type":"skill","name": fname})
+        else:
+            self.memory.append_message(cid, "tool", str(result), metadata={"type":"base_tool","name": fname})
+        messages.append({"role": "tool", "name": fname, "content": str(result)})
+        if fname == "select_skill" and active_skill_text and not str(result).startswith("错误"):
+            self.memory.set_active_skills(cid, list(active_skill_ids))
+            parts = [
+                f"### 已加载 Skill #{i + 1}\n\n{t.strip()}"
+                for i, t in enumerate(active_skill_text)
+            ]
+            merged = "\n\n---\n\n".join(parts)
+            extra_user = (
+                "当前会话中已加载的 Skill 文档如下（按加载顺序，须同时遵守；"
+                "若有冲突以更具体的条款或后加载的文档为准）：\n\n" + merged
+            )
+            self.memory.append_message(cid, "user", extra_user,metadata={"type":"skill_content"})
+            messages.append({"role": "user", "content": extra_user})
+
     def run(self, user_query: str, log_callback: Optional[Callable[[str, str], Any]] = None) -> str:
         model = get_chat_model()
         tools = self._merged_tools(model)
         catalog = build_skills_catalog_text(self.registry.list_skills())
         system_prompt = _build_system_prompt(catalog)
-        messages: list[dict] = [
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_query.strip()},
         ]
         active_skill_text: list[str] = []
         active_skill_ids: list[str] = []
+
+        if self.memory is not None:
+            self._append_model_messages(messages, system_prompt=system_prompt, user_query=user_query)
 
         for step in range(self.max_steps):
             msg = model.complete_with_tools(messages, tools)
@@ -104,10 +169,14 @@ class SkillAgent:
                 if text:
                     if log_callback:
                         log_callback(text, "assistant")
+                    if self.memory is not None:
+                        self.memory.append_message(self._conversation_id, "assistant", text)
                     return text
                 err = "模型未返回工具调用且无文本内容，无法继续。"
                 if log_callback:
                     log_callback(err, "assistant")
+                if self.memory is not None:
+                    self.memory.append_message(self._conversation_id, "assistant", err)
                 return err
 
             fname = fc.get("name") or ""
@@ -126,7 +195,7 @@ class SkillAgent:
                     except (TypeError, ValueError):
                         args_s = str(args)
                     log_callback(f"调用工具 `{fname}` · {args_s}", "tool")
-
+            # 执行tool
             result, terminate, final = self._dispatch(fname, args, active_skill_text, active_skill_ids)
 
             if log_callback and fname == "select_skill":
@@ -151,26 +220,36 @@ class SkillAgent:
                 log_callback(r, "assistant")
 
             if terminate and final is not None:
+                # 正常执行结束，最后回答非空
+                if self.memory is not None:
+                    cid = self._conversation_id
+                    self.memory.append_message(cid, "tool", str(result), metadata={"name": fname})
+                    self.memory.append_message(cid, "assistant", str(final))
                 return final
 
-            messages.append({"role": "tool", "name": fname, "content": str(result)})
-            if fname == "select_skill" and active_skill_text and not str(result).startswith("错误"):
-                parts = [
-                    f"### 已加载 Skill #{i + 1}\n\n{t.strip()}"
-                    for i, t in enumerate(active_skill_text)
-                ]
-                merged = "\n\n---\n\n".join(parts)
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "当前会话中已加载的 Skill 文档如下（按加载顺序，须同时遵守；"
-                            "若有冲突以更具体的条款或后加载的文档为准）：\n\n" + merged
-                        ),
-                    }
-                )
+            if self.memory is not None:
+                self._persist_after_tool_turn(fname, str(result), active_skill_text, active_skill_ids, messages)
+            else:
+                messages.append({"role": "tool", "name": fname, "content": str(result)})
+                if fname == "select_skill" and active_skill_text and not str(result).startswith("错误"):
+                    parts = [
+                        f"### 已加载 Skill #{i + 1}\n\n{t.strip()}"
+                        for i, t in enumerate(active_skill_text)
+                    ]
+                    merged = "\n\n---\n\n".join(parts)
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "当前会话中已加载的 Skill 文档如下（按加载顺序，须同时遵守；"
+                                "若有冲突以更具体的条款或后加载的文档为准）：\n\n" + merged
+                            ),
+                        }
+                    )
 
         tail = f"已达到最大执行步数限制（{self.max_steps}），已停止。"
         if log_callback:
             log_callback(tail, "assistant")
+        if self.memory is not None:
+            self.memory.append_message(self._conversation_id, "assistant", tail)
         return tail

@@ -21,7 +21,10 @@ from PySide6.QtWidgets import (
 
 import config
 from executor import Executor
+from memory import SqliteMemory
 from skill_agent import SkillAgent
+
+
 
 
 class SkillAgentWorkerThread(QThread):
@@ -75,7 +78,13 @@ class SkillAgentMainWindow(QMainWindow):
         super().__init__()
         self.work_dir = config.WORKER_DIR
         self.executor = Executor(self.work_dir)
-        self.skill_agent = SkillAgent(self.work_dir, executor=self.executor)
+        self._memory = SqliteMemory(username=config.DEFAULT_SKILL_AGENT_USER)
+        self.skill_agent = SkillAgent(
+            self.work_dir,
+            executor=self.executor,
+            memory=self._memory,
+            username=config.DEFAULT_SKILL_AGENT_USER,
+        )
         self.worker_thread: SkillAgentWorkerThread | None = None
         self._init_ui()
 
