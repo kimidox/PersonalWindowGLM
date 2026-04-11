@@ -5,6 +5,7 @@ from typing import Optional
 import config
 
 from .BaseChatModel import BaseChatModel
+from .gemma_chat_model import GemmaChatModel
 from .glm_chat_model import GLMChatModel
 from .qwen_chat_model import QwenChatModel
 
@@ -19,6 +20,8 @@ def get_chat_model(model_name: Optional[str] = None) -> BaseChatModel:
         return GLMChatModel(model_name=model)
     if model.startswith("qwen3.5") or model.startswith("qwen"):
         return QwenChatModel(model_name=model)
+    if model.startswith("gemma"):
+        return GemmaChatModel(model_name=model_name)
 
     # 兜底：优先按 qwen 格式跑（tool schema 与解析已被统一）
     return QwenChatModel(model_name=model)

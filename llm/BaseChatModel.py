@@ -33,7 +33,7 @@ class BaseChatModel(ABC):
         self.api_key = api_key or config.OPENAI_API_KEY
         self.base_url = base_url or config.OPENAI_BASE_URL
         self.temperature = temperature
-        self.extra_body = extra_body if extra_body is not None else {"enable_thinking": False}
+        self.extra_body = extra_body if extra_body is not None else {"enable_thinking": True}
         self._client: Optional[OpenAI] = None
 
     def get_client(self) -> OpenAI:
