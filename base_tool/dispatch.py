@@ -42,14 +42,19 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry: Skill
         return p.read_text(encoding="utf-8", errors="replace")
 
     if name == "write_text_file":
-        p = _resolve_safe(ctx, str(args.get("file_name", "")))
+        rel_path=str(args.get("path", ""))
+        if args.get("skill_id"):
+            rel_path=splice_skill_path(rel_path,args.get("skill_id"),registry)
+        p = _resolve_safe(ctx, str(rel_path))
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(str(args.get("content", "")), encoding="utf-8")
         return f"已写入: {p}"
 
     if name == "list_directory":
-        rel = str(args.get("path") or ".").strip()
-        d = _resolve_safe(ctx, rel)
+        rel_path = str(args.get("path", ""))
+        if args.get("skill_id"):
+            rel_path = splice_skill_path(rel_path, args.get("skill_id"), registry)
+        d = _resolve_safe(ctx, rel_path)
         if not d.is_dir():
             return f"错误: 不是目录或不存在: {d}"
         names = sorted(os.listdir(d))
