@@ -300,7 +300,8 @@ class QwenChatModel(BaseChatModel):
             messages=messages,
             tools=tools,
             tool_choice="auto",
-            temperature=self.temperature,
+            max_tokens=25042,
+            temperature=0.3,
             extra_body=self.extra_body,
         )
         msg = response.choices[0].message

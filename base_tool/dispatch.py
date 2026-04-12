@@ -47,6 +47,7 @@ def execute_atomic_tool(name: str, args: dict, ctx: ToolContext, registry: Skill
             rel_path=splice_skill_path(rel_path,args.get("skill_id"),registry)
         p = _resolve_safe(ctx, str(rel_path))
         p.parent.mkdir(parents=True, exist_ok=True)
+        print(f"已写入: {len(args.get('content', ''))}")
         p.write_text(str(args.get("content", "")), encoding="utf-8")
         return f"已写入: {p}"
 
