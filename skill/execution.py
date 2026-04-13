@@ -40,6 +40,7 @@ def execute_skill_control_tool(
     registry: SkillRegistry,
     active_skill_text: list[str],
     active_skill_ids: list[str],
+    disabled_skill_ids: frozenset[str] | None = None,
 ) -> tuple[str, bool, str | None]:
     """
     执行 Skill 控制类工具。
@@ -52,6 +53,12 @@ def execute_skill_control_tool(
         if sid in active_skill_ids:
             i = active_skill_ids.index(sid)
             return (active_skill_text[i], False, None)
+        if disabled_skill_ids is not None and sid in disabled_skill_ids:
+            return (
+                f"错误: Skill「{sid}」已在设置中禁用，无法加载到会话。请在界面设置中重新启用后再试。",
+                False,
+                None,
+            )
         s = registry.get(sid)
         if s is None:
             return (f"错误: 未找到 skill_id={sid!r}。请从系统提示的列表中选择有效 id。", False, None)

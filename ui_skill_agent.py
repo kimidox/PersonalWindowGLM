@@ -1,19 +1,25 @@
 from __future__ import annotations
 
-import os
+import json
 import re
 import sys
 from html import escape
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
+    QDialog,
+    QDialogButtonBox,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -21,8 +27,10 @@ from PySide6.QtWidgets import (
 
 import config
 from executor import Executor
+from llm import get_chat_model
 from memory import SqliteMemory
 from skill_agent import SkillAgent
+from skill_agent_preferences import load_disabled_skill_ids, save_disabled_skill_ids
 
 
 
@@ -73,6 +81,138 @@ def _plain_block_html(text: str) -> str:
     return f"<p>{escape(t).replace(chr(10), '<br/>')}</p>"
 
 
+def _llm_request_params_text() -> str:
+    m = get_chat_model()
+    try:
+        body = m.extra_body if isinstance(m.extra_body, dict) else dict(m.extra_body or {})
+    except (TypeError, ValueError):
+        body = m.extra_body
+    body_s = json.dumps(body, ensure_ascii=False, indent=2) if isinstance(body, dict) else repr(body)
+    key = m.api_key or ""
+    key_disp = "（未设置）" if not key else f"{key[:4]}…{key[-2:]}" if len(key) > 8 else "（已设置）"
+    parts = [
+        f"model_name: {m.model_name}",
+        f"temperature: {m.temperature}",
+        f"base_url: {m.base_url}",
+        f"api_key: {key_disp}",
+        f"extra_body:\n{body_s}",
+        f"SKILL_AGENT_MAX_STEPS（Agent 循环上限）: {config.SKILL_AGENT_MAX_STEPS}",
+    ]
+    return "\n".join(parts)
+
+
+class SkillAgentSettingsDialog(QDialog):
+    """会话设置：模型信息、LLM 请求参数摘要、Skill 启用/禁用（禁用后不可加载到会话）。"""
+
+    def __init__(self, parent: QWidget | None, skill_agent: SkillAgent) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("会话与模型设置")
+        self.setModal(True)
+        self.resize(560, 520)
+        self._skill_agent = skill_agent
+        self._disabled: set[str] = set(load_disabled_skill_ids())
+        self._skill_checks: list[tuple[str, QCheckBox]] = []
+
+        root = QVBoxLayout(self)
+        root.setSpacing(10)
+
+        lm = QLabel("当前大模型")
+        f = lm.font()
+        f.setBold(True)
+        lm.setFont(f)
+        root.addWidget(lm)
+        self._model_label = QLabel()
+        self._model_label.setWordWrap(True)
+        self._model_label.setTextFormat(Qt.TextFormat.RichText)
+        root.addWidget(self._model_label)
+
+        lp = QLabel("LLM 请求参数（与当前配置一致，只读）")
+        fp = lp.font()
+        fp.setBold(True)
+        lp.setFont(fp)
+        root.addWidget(lp)
+        self._params_edit = QTextEdit()
+        self._params_edit.setReadOnly(True)
+        self._params_edit.setFont(QFont("Consolas", 9))
+        self._params_edit.setMinimumHeight(140)
+        self._params_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        root.addWidget(self._params_edit)
+
+        ls = QLabel(
+            "Skill 列表：勾选「启用」表示可用；取消勾选即禁用，禁用后不出现在系统列表中，且无法 select_skill 加载。"
+        )
+        ls.setWordWrap(True)
+        fs = ls.font()
+        fs.setBold(True)
+        ls.setFont(fs)
+        root.addWidget(ls)
+
+        self._skills_scroll = QScrollArea()
+        self._skills_scroll.setWidgetResizable(True)
+        self._skills_scroll.setMinimumHeight(200)
+        self._skills_inner = QWidget()
+        self._skills_layout = QVBoxLayout(self._skills_inner)
+        self._skills_layout.setContentsMargins(4, 4, 4, 4)
+        self._skills_layout.setSpacing(6)
+        self._skills_scroll.setWidget(self._skills_inner)
+        root.addWidget(self._skills_scroll, stretch=1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+        self._repopulate_skill_rows()
+        self._refresh_llm_block()
+
+    def _refresh_llm_block(self) -> None:
+        m = get_chat_model()
+        self._model_label.setText(f"<span style='font-family:Consolas,monospace'>{escape(m.model_name or '')}</span>")
+        self._params_edit.setPlainText(_llm_request_params_text())
+
+    def _repopulate_skill_rows(self) -> None:
+        self._skill_checks.clear()
+        self._skills_inner = QWidget()
+        self._skills_layout = QVBoxLayout(self._skills_inner)
+        self._skills_layout.setContentsMargins(4, 4, 4, 4)
+        self._skills_layout.setSpacing(6)
+        # setWidget 会接管并销毁滚动区里原来的 widget，不可再对旧指针 deleteLater
+        self._skills_scroll.setWidget(self._skills_inner)
+
+        skills = sorted(
+            self._skill_agent.registry.list_skills(),
+            key=lambda s: (s.skill_id or "").lower(),
+        )
+        for s in skills:
+            sid = (s.skill_id or "").strip()
+            if not sid:
+                continue
+            cb = QCheckBox("启用")
+            cb.setChecked(sid not in self._disabled)
+            cb.stateChanged.connect(lambda _st, _sid=sid, _cb=cb: self._on_skill_toggled(_sid, _cb))
+            row = QHBoxLayout()
+            row.addWidget(cb)
+            name_lab = QLabel(f"{sid} · {s.name or ''}")
+            name_lab.setWordWrap(True)
+            row.addWidget(name_lab, stretch=1)
+            self._skills_layout.addLayout(row)
+            self._skill_checks.append((sid, cb))
+        self._skills_layout.addStretch(1)
+
+    def _on_skill_toggled(self, skill_id: str, cb: QCheckBox) -> None:
+        if cb.isChecked():
+            self._disabled.discard(skill_id)
+        else:
+            self._disabled.add(skill_id)
+        save_disabled_skill_ids(self._disabled)
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self._skill_agent.reload_skills()
+        self._disabled = set(load_disabled_skill_ids())
+        self._repopulate_skill_rows()
+        self._refresh_llm_block()
+
+
 class SkillAgentMainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -107,7 +247,23 @@ class SkillAgentMainWindow(QMainWindow):
             "QTextEdit { background-color: #fafafa; border: 1px solid #e0e0e0; border-radius: 8px; }"
         )
         self.chat_view.setMinimumHeight(280)
-        layout.addWidget(self.chat_view, stretch=1)
+
+        chat_header = QHBoxLayout()
+        chat_header.addStretch(1)
+        self.settings_btn = QPushButton("设置")
+        self.settings_btn.setFont(QFont("Microsoft YaHei", 9))
+        self.settings_btn.setFixedHeight(28)
+        self.settings_btn.setToolTip("模型、LLM 参数与 Skill 启用状态")
+        self.settings_btn.clicked.connect(self._open_settings)
+        chat_header.addWidget(self.settings_btn, alignment=Qt.AlignmentFlag.AlignRight)
+
+        chat_wrap = QVBoxLayout()
+        chat_wrap.setSpacing(4)
+        chat_wrap.addLayout(chat_header)
+        chat_wrap.addWidget(self.chat_view, stretch=1)
+        chat_container = QWidget()
+        chat_container.setLayout(chat_wrap)
+        layout.addWidget(chat_container, stretch=1)
 
         row = QHBoxLayout()
         self.input_edit = QLineEdit()
@@ -143,6 +299,9 @@ class SkillAgentMainWindow(QMainWindow):
             f'<tr><td align="{al}">{inner_html}</td></tr></table>'
         )
         self._scroll_to_end()
+
+    def _open_settings(self) -> None:
+        SkillAgentSettingsDialog(self, self.skill_agent).exec()
 
     def _append_user(self, text: str) -> None:
         body = _plain_block_html(text)

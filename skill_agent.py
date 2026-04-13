@@ -7,6 +7,7 @@ from typing import Any, Callable, Optional
 
 import config
 from base_tool import ToolContext, all_definition_dicts, execute_atomic_tool, tools_for_model
+from skill_agent_preferences import load_disabled_skill_ids
 from executor import Executor
 from llm import get_chat_model
 from llm.BaseChatModel import BaseChatModel
@@ -72,6 +73,9 @@ class SkillAgent:
         self._tool_ctx = ToolContext(work_dir=self.work_dir, executor=executor)
         self._definitions = list(SKILL_CONTROL_TOOL_DEFINITIONS) + list(all_definition_dicts())
 
+    def _disabled_skill_ids_frozen(self) -> frozenset[str]:
+        return frozenset(load_disabled_skill_ids())
+
     @property
     def conversation_id(self) -> str:
         return self._conversation_id
@@ -96,6 +100,7 @@ class SkillAgent:
                 registry=self.registry,
                 active_skill_text=active_skill_text,
                 active_skill_ids=active_skill_ids,
+                disabled_skill_ids=self._disabled_skill_ids_frozen(),
             )
         return (execute_atomic_tool(name, args, self._tool_ctx,self.registry), False, None)
 
@@ -151,7 +156,9 @@ class SkillAgent:
     def run(self, user_query: str, log_callback: Optional[Callable[[str, str], Any]] = None) -> str:
         model = get_chat_model()
         tools = self._merged_tools(model)
-        catalog = build_skills_catalog_text(self.registry.list_skills())
+        disabled = self._disabled_skill_ids_frozen()
+        skills_visible = [s for s in self.registry.list_skills() if s.skill_id not in disabled]
+        catalog = build_skills_catalog_text(skills_visible)
         system_prompt = _build_system_prompt(catalog)
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
