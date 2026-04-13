@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -36,20 +37,32 @@ from skill_agent_preferences import load_disabled_skill_ids, save_disabled_skill
 
 
 class SkillAgentWorkerThread(QThread):
-    log_signal = Signal(str, str)
+    """绑定发起请求时的 conversation 与聊天控件，避免切换标签后日志串页。"""
+
+    log_signal = Signal(str, str, QTextEdit)
     finished_signal = Signal(str)
 
-    def __init__(self, agent: SkillAgent, query: str) -> None:
+    def __init__(
+        self,
+        agent: SkillAgent,
+        query: str,
+        *,
+        conversation_id: str,
+        target_chat: QTextEdit,
+    ) -> None:
         super().__init__()
         self.agent = agent
         self.query = query
+        self.conversation_id = conversation_id
+        self.target_chat = target_chat
 
     def run(self) -> None:
+        self.agent.set_conversation_id(self.conversation_id)
         result = self.agent.run(self.query, self._log_callback)
         self.finished_signal.emit(result)
 
     def _log_callback(self, message: str, msg_type: str = "info") -> None:
-        self.log_signal.emit(message, msg_type)
+        self.log_signal.emit(message, msg_type, self.target_chat)
 
 
 def _normalize_newlines(text: str) -> str:
@@ -213,6 +226,45 @@ class SkillAgentSettingsDialog(QDialog):
         self._refresh_llm_block()
 
 
+CHAT_DOCUMENT_STYLESHEET = (
+    "body { margin: 0; } p { margin-top: 4px; margin-bottom: 4px; } "
+    "ul { margin: 4px 0; padding-left: 22px; } h1,h2,h3 { margin: 8px 0 4px; }"
+)
+
+
+def _tab_title_for_conversation(conversation_id: str) -> str:
+    c = (conversation_id or "").strip()
+    if len(c) >= 10:
+        return f"会话 · {c[:8]}"
+    return f"会话 · {c or '?'}"
+
+
+def _apply_chat_view_style(chat: QTextEdit) -> None:
+    chat.setReadOnly(True)
+    chat.setFont(QFont("Microsoft YaHei", 10))
+    chat.setAcceptRichText(True)
+    chat.setPlaceholderText("对话记录将显示在这里…")
+    chat.setStyleSheet(
+        "QTextEdit { background-color: #fafafa; border: 1px solid #e0e0e0; border-radius: 8px; }"
+    )
+    chat.setMinimumHeight(200)
+    chat.document().setDefaultStyleSheet(CHAT_DOCUMENT_STYLESHEET)
+
+
+class ChatSessionTab(QWidget):
+    """单个会话标签页：绑定 conversation_id 与聊天记录控件。"""
+
+    def __init__(self, conversation_id: str) -> None:
+        super().__init__()
+        self.conversation_id = (conversation_id or "").strip()
+        self.chat_view = QTextEdit()
+        _apply_chat_view_style(self.chat_view)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self.chat_view)
+
+
 class SkillAgentMainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -238,18 +290,14 @@ class SkillAgentMainWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
-        self.chat_view = QTextEdit()
-        self.chat_view.setReadOnly(True)
-        self.chat_view.setFont(QFont("Microsoft YaHei", 10))
-        self.chat_view.setAcceptRichText(True)
-        self.chat_view.setPlaceholderText("对话记录将显示在这里…")
-        self.chat_view.setStyleSheet(
-            "QTextEdit { background-color: #fafafa; border: 1px solid #e0e0e0; border-radius: 8px; }"
-        )
-        self.chat_view.setMinimumHeight(280)
-
         chat_header = QHBoxLayout()
         chat_header.addStretch(1)
+        self.new_conversation_btn = QPushButton("新增会话")
+        self.new_conversation_btn.setFont(QFont("Microsoft YaHei", 9))
+        self.new_conversation_btn.setFixedHeight(28)
+        self.new_conversation_btn.setToolTip("新建一个会话标签页（新的 conversation_id）")
+        self.new_conversation_btn.clicked.connect(self._on_new_conversation)
+        chat_header.addWidget(self.new_conversation_btn, alignment=Qt.AlignmentFlag.AlignRight)
         self.settings_btn = QPushButton("设置")
         self.settings_btn.setFont(QFont("Microsoft YaHei", 9))
         self.settings_btn.setFixedHeight(28)
@@ -257,10 +305,22 @@ class SkillAgentMainWindow(QMainWindow):
         self.settings_btn.clicked.connect(self._open_settings)
         chat_header.addWidget(self.settings_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
+        self.chat_tabs = QTabWidget()
+        self.chat_tabs.setDocumentMode(True)
+        self.chat_tabs.setTabsClosable(True)
+        self.chat_tabs.setMovable(True)
+        self.chat_tabs.tabCloseRequested.connect(self._on_tab_close_requested)
+        self.chat_tabs.currentChanged.connect(self._on_current_tab_changed)
+        self.chat_tabs.setMinimumHeight(280)
+
+        first = ChatSessionTab(self.skill_agent.conversation_id)
+        self.chat_tabs.addTab(first, _tab_title_for_conversation(first.conversation_id))
+        self.chat_tabs.setTabToolTip(0, first.conversation_id)
+
         chat_wrap = QVBoxLayout()
         chat_wrap.setSpacing(4)
         chat_wrap.addLayout(chat_header)
-        chat_wrap.addWidget(self.chat_view, stretch=1)
+        chat_wrap.addWidget(self.chat_tabs, stretch=1)
         chat_container = QWidget()
         chat_container.setLayout(chat_wrap)
         layout.addWidget(chat_container, stretch=1)
@@ -280,30 +340,67 @@ class SkillAgentMainWindow(QMainWindow):
         row.addWidget(self.send_btn)
         layout.addLayout(row)
 
-        doc = self.chat_view.document()
-        doc.setDefaultStyleSheet(
-            "body { margin: 0; } p { margin-top: 4px; margin-bottom: 4px; } "
-            "ul { margin: 4px 0; padding-left: 22px; } h1,h2,h3 { margin: 8px 0 4px; }"
-        )
+    def _active_session_tab(self) -> ChatSessionTab | None:
+        w = self.chat_tabs.currentWidget()
+        return w if isinstance(w, ChatSessionTab) else None
 
-    def _scroll_to_end(self) -> None:
-        bar = self.chat_view.verticalScrollBar()
+    def _active_chat_view(self) -> QTextEdit | None:
+        t = self._active_session_tab()
+        return t.chat_view if t else None
+
+    def _on_current_tab_changed(self, _index: int) -> None:
+        tab = self._active_session_tab()
+        if tab is not None:
+            self.skill_agent.set_conversation_id(tab.conversation_id)
+
+    def _on_tab_close_requested(self, index: int) -> None:
+        if self.chat_tabs.count() <= 1:
+            QMessageBox.information(self, "提示", "至少保留一个会话标签页。")
+            return
+        page = self.chat_tabs.widget(index)
+        if not isinstance(page, ChatSessionTab):
+            return
+        if self.worker_thread and self.worker_thread.isRunning():
+            if page.conversation_id == self.worker_thread.conversation_id:
+                QMessageBox.warning(self, "提示", "该会话正在执行中，请结束后再关闭标签。")
+                return
+        self._memory.clear_conversation(page.conversation_id)
+        self.chat_tabs.removeTab(index)
+        page.deleteLater()
+
+    def _scroll_to_end(self, chat_view: QTextEdit) -> None:
+        bar = chat_view.verticalScrollBar()
         bar.setValue(bar.maximum())
-        self.chat_view.moveCursor(QTextCursor.End)
+        chat_view.moveCursor(QTextCursor.End)
 
-    def _insert_row(self, inner_html: str, *, align: str) -> None:
+    def _insert_row(self, chat_view: QTextEdit, inner_html: str, *, align: str) -> None:
         al = "right" if align == "right" else "left"
-        self.chat_view.moveCursor(QTextCursor.End)
-        self.chat_view.insertHtml(
+        chat_view.moveCursor(QTextCursor.End)
+        chat_view.insertHtml(
             f'<table width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 14px 0;">'
             f'<tr><td align="{al}">{inner_html}</td></tr></table>'
         )
-        self._scroll_to_end()
+        self._scroll_to_end(chat_view)
 
     def _open_settings(self) -> None:
         SkillAgentSettingsDialog(self, self.skill_agent).exec()
 
-    def _append_user(self, text: str) -> None:
+    def _on_new_conversation(self) -> None:
+        if self.worker_thread and self.worker_thread.isRunning():
+            QMessageBox.warning(self, "提示", "当前仍有对话在执行，请结束后再新建会话。")
+            return
+        self.skill_agent.start_new_conversation()
+        cid = self.skill_agent.conversation_id
+        tab = ChatSessionTab(cid)
+        idx = self.chat_tabs.addTab(tab, _tab_title_for_conversation(cid))
+        self.chat_tabs.setTabToolTip(idx, cid)
+        self.chat_tabs.setCurrentIndex(idx)
+        hint = _plain_block_html(
+            f"已新建会话标签页，后续消息将写入本页对应的 conversation。\nconversation_id：{cid}"
+        )
+        self._append_assistant_card(tab.chat_view, hint, subtitle="系统")
+
+    def _append_user(self, chat_view: QTextEdit, text: str) -> None:
         body = _plain_block_html(text)
         bubble = (
             f'<div style="display:inline-block;max-width:88%;text-align:left;'
@@ -312,9 +409,11 @@ class SkillAgentMainWindow(QMainWindow):
             f'<div style="font-size:11px;color:#0d47a1;font-weight:600;margin-bottom:6px;">用户</div>'
             f'<div style="color:#263238;">{body}</div></div>'
         )
-        self._insert_row(bubble, align="right")
+        self._insert_row(chat_view, bubble, align="right")
 
-    def _append_assistant_card(self, body_html: str, *, subtitle: str = "助手") -> None:
+    def _append_assistant_card(
+        self, chat_view: QTextEdit, body_html: str, *, subtitle: str = "助手"
+    ) -> None:
         bubble = (
             f'<div style="display:inline-block;max-width:92%;text-align:left;'
             f"background-color:#f1f8e9;border-radius:12px;padding:10px 14px;"
@@ -323,9 +422,9 @@ class SkillAgentMainWindow(QMainWindow):
             f"{escape(subtitle)}</div>"
             f'<div style="color:#263238;">{body_html}</div></div>'
         )
-        self._insert_row(bubble, align="left")
+        self._insert_row(chat_view, bubble, align="left")
 
-    def _append_tool_line(self, text: str) -> None:
+    def _append_tool_line(self, chat_view: QTextEdit, text: str) -> None:
         safe = escape(_normalize_newlines(text))
         inner = (
             f'<div style="display:inline-block;max-width:92%;text-align:left;'
@@ -334,15 +433,15 @@ class SkillAgentMainWindow(QMainWindow):
             f'<span style="font-size:11px;font-weight:600;color:#37474f;">工具</span>'
             f'<span style="font-size:11px;color:#546e7a;"> · {safe}</span></div>'
         )
-        self._insert_row(inner, align="left")
+        self._insert_row(chat_view, inner, align="left")
 
-    def _append_assistant_markdown(self, markdown: str) -> None:
+    def _append_assistant_markdown(self, chat_view: QTextEdit, markdown: str) -> None:
         frag = _markdown_fragment_html(markdown)
-        self._append_assistant_card(frag, subtitle="助手")
+        self._append_assistant_card(chat_view, frag, subtitle="助手")
 
-    def _append_doc_markdown(self, markdown: str) -> None:
+    def _append_doc_markdown(self, chat_view: QTextEdit, markdown: str) -> None:
         frag = _markdown_fragment_html(markdown)
-        self._append_assistant_card(frag, subtitle="Skill 文档")
+        self._append_assistant_card(chat_view, frag, subtitle="Skill 文档")
 
     def _on_send(self) -> None:
         text = self.input_edit.text().strip()
@@ -352,28 +451,39 @@ class SkillAgentMainWindow(QMainWindow):
         if self.worker_thread and self.worker_thread.isRunning():
             QMessageBox.warning(self, "提示", "上一轮流式仍在执行，请稍候")
             return
+        tab = self._active_session_tab()
+        chat = self._active_chat_view()
+        if tab is None or chat is None:
+            QMessageBox.warning(self, "提示", "没有可用的会话标签页")
+            return
 
-        self._append_user(text)
+        self.skill_agent.set_conversation_id(tab.conversation_id)
+        self._append_user(chat, text)
         self.input_edit.clear()
 
         self.send_btn.setEnabled(False)
         self.input_edit.setEnabled(False)
 
-        self.worker_thread = SkillAgentWorkerThread(self.skill_agent, text)
+        self.worker_thread = SkillAgentWorkerThread(
+            self.skill_agent,
+            text,
+            conversation_id=tab.conversation_id,
+            target_chat=chat,
+        )
         self.worker_thread.log_signal.connect(self._on_log)
         self.worker_thread.finished_signal.connect(self._on_finished)
         self.worker_thread.start()
 
-    def _on_log(self, message: str, msg_type: str) -> None:
+    def _on_log(self, message: str, msg_type: str, target_chat: QTextEdit) -> None:
         show_tool_ui = config.SKILL_AGENT_UI_SHOW_TOOL_CALLS
         if msg_type == "tool":
             if show_tool_ui:
-                self._append_tool_line(message)
+                self._append_tool_line(target_chat, message)
         elif msg_type == "doc":
             if show_tool_ui:
-                self._append_doc_markdown(message)
+                self._append_doc_markdown(target_chat, message)
         elif msg_type in ("assistant", "response"):
-            self._append_assistant_markdown(message)
+            self._append_assistant_markdown(target_chat, message)
 
     def _on_finished(self, _result: str) -> None:
         self.send_btn.setEnabled(True)
