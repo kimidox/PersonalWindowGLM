@@ -235,8 +235,8 @@ CHAT_DOCUMENT_STYLESHEET = (
 def _tab_title_for_conversation(conversation_id: str) -> str:
     c = (conversation_id or "").strip()
     if len(c) >= 10:
-        return f"会话 · {c[:8]}"
-    return f"会话 · {c or '?'}"
+        return f"新会话 · {c[:5]}"
+    return f"新会话 · {c[:5] or '?'}"
 
 
 def _apply_chat_view_style(chat: QTextEdit) -> None:

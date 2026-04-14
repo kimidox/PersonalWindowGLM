@@ -89,7 +89,7 @@ class SkillAgent:
             self._conversation_id = ""
             return (self._conversation_id, "")
         self._conversation_id = str(uuid.uuid4())
-        title = self.memory.ensure_conversation(self._conversation_id)
+        title = self.memory.ensure_conversation(self._conversation_id,title=f"新会话-{self._conversation_id[:5]}")
         return (self._conversation_id, title)
 
     def set_conversation_id(self, conversation_id: str) -> None:
