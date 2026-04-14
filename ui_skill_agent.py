@@ -389,10 +389,9 @@ class SkillAgentMainWindow(QMainWindow):
         if self.worker_thread and self.worker_thread.isRunning():
             QMessageBox.warning(self, "提示", "当前仍有对话在执行，请结束后再新建会话。")
             return
-        self.skill_agent.start_new_conversation()
-        cid = self.skill_agent.conversation_id
+        cid, default_title = self.skill_agent.start_new_conversation()
         tab = ChatSessionTab(cid)
-        idx = self.chat_tabs.addTab(tab, _tab_title_for_conversation(cid))
+        idx = self.chat_tabs.addTab(tab, default_title or _tab_title_for_conversation(cid))
         self.chat_tabs.setTabToolTip(idx, cid)
         self.chat_tabs.setCurrentIndex(idx)
         hint = _plain_block_html(

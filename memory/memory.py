@@ -41,3 +41,7 @@ class Memory(ABC):
     @abstractmethod
     def get_active_skills(self, conversation_id: str) -> list[str]:
         """读取当前会话已加载的 Skill id 列表。"""
+
+    @abstractmethod
+    def ensure_conversation(self, conversation_id: str, *, title: str | None = None) -> str:
+        """保证 `conversations` 中存在该会话行并提交；返回采用的展示标题（未指定时与 id 相同）。"""

@@ -83,13 +83,14 @@ class SkillAgent:
     def reload_skills(self) -> None:
         self.registry.reload()
 
-    def start_new_conversation(self) -> str:
-        """生成新的 conversation_id；旧会话数据仍保留在 Memory 中。"""
+    def start_new_conversation(self) -> tuple[str, str]:
+        """生成新的 conversation_id 并立即落库；返回 (id, 默认展示名，暂为 id)。"""
         if self.memory is None:
             self._conversation_id = ""
-            return self._conversation_id
+            return (self._conversation_id, "")
         self._conversation_id = str(uuid.uuid4())
-        return self._conversation_id
+        title = self.memory.ensure_conversation(self._conversation_id)
+        return (self._conversation_id, title)
 
     def set_conversation_id(self, conversation_id: str) -> None:
         """切换到已有或新建的 conversation（与多标签页联动）。"""

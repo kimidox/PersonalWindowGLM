@@ -46,13 +46,39 @@ class SqliteMemory(Memory):
         row = Conversations(
             conversation_id=conversation_id,
             user_id=str(user.uuid),
-            title=None,
+            title=conversation_id,
             active_skill_ids=[],
         )
         db.add(row)
         db.commit()
         db.refresh(row)
         return row
+
+    def ensure_conversation(self, conversation_id: str, *, title: str | None = None) -> str:
+        cid = (conversation_id or "").strip()
+        if not cid:
+            return ""
+        resolved_title = title if title is not None else cid
+        with get_session() as db:
+            row = db.query(Conversations).filter(Conversations.conversation_id == cid).first()
+            if row:
+                if not row.title:
+                    row.title = resolved_title
+                    row.updated_at = datetime.now()
+                    db.commit()
+                    db.refresh(row)
+                return str(row.title) if row.title else cid
+            user = _ensure_user_in_db(db, self._username)
+            row = Conversations(
+                conversation_id=cid,
+                user_id=str(user.uuid),
+                title=resolved_title,
+                active_skill_ids=[],
+            )
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+            return str(row.title) if row.title else cid
 
     def append_message(
         self,
