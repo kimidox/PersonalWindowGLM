@@ -216,7 +216,10 @@ class SkillAgent:
                         args_s = json.dumps(args, ensure_ascii=False)
                     except (TypeError, ValueError):
                         args_s = str(args)
+                    log_callback(f"{msg.model_extra['reasoning_content']}", "think")
                     log_callback(f"调用工具 `{fname}` · {args_s}", "tool")
+                else:
+                    log_callback(f"{msg.model_extra['reasoning_content']}","think")
             # 执行tool
             result, terminate, final = self._dispatch(fname, args, active_skill_text, active_skill_ids)
 

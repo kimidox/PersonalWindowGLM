@@ -422,6 +422,18 @@ class SkillAgentMainWindow(QMainWindow):
             f'<div style="color:#263238;">{body_html}</div></div>'
         )
         self._insert_row(chat_view, bubble, align="left")
+    def _append_assistant_think_card(
+        self, chat_view: QTextEdit, body_html: str, *, subtitle: str = "助手"
+    ) -> None:
+        bubble = (
+            f'<div style="display:inline-block;max-width:92%;text-align:left;'
+            f"background-color:#f0f0f0;border-radius:12px;padding:10px 14px;"
+            f'border:1px solid #dddddd;">'
+            f'<div style="font-size:11px;color:#555555;font-weight:600;margin-bottom:6px;">'
+            f"{escape(subtitle)}</div>"
+            f'<div style="color:#263238;">{body_html}</div></div>'
+        )
+        self._insert_row(chat_view, bubble, align="left")
 
     def _append_tool_line(self, chat_view: QTextEdit, text: str) -> None:
         safe = escape(_normalize_newlines(text))
@@ -437,6 +449,9 @@ class SkillAgentMainWindow(QMainWindow):
     def _append_assistant_markdown(self, chat_view: QTextEdit, markdown: str) -> None:
         frag = _markdown_fragment_html(markdown)
         self._append_assistant_card(chat_view, frag, subtitle="助手")
+    def _append_assistant_think_markdown(self, chat_view: QTextEdit, markdown: str):
+        frag = _markdown_fragment_html(markdown)
+        self._append_assistant_think_card(chat_view, frag, subtitle="助手-think")
 
     def _append_doc_markdown(self, chat_view: QTextEdit, markdown: str) -> None:
         frag = _markdown_fragment_html(markdown)
@@ -483,6 +498,8 @@ class SkillAgentMainWindow(QMainWindow):
                 self._append_doc_markdown(target_chat, message)
         elif msg_type in ("assistant", "response"):
             self._append_assistant_markdown(target_chat, message)
+        elif msg_type in ("think"):
+            self._append_assistant_think_markdown(target_chat, message)
 
     def _on_finished(self, _result: str) -> None:
         self.send_btn.setEnabled(True)
