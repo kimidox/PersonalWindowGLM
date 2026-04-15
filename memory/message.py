@@ -23,6 +23,13 @@ class Message:
             d["name"] = str(self.ext["name"])
         return d
 
+    def to_record_dict(self) -> dict[str, Any]:
+        """含 `metadata`（来自 ext）的记录，供 UI 恢复历史；不含 system 时可与 LLM 字典同构并附加元数据。"""
+        d = dict(self.to_llm_dict())
+        if self.ext:
+            d["metadata"] = dict(self.ext)
+        return d
+
     @classmethod
     def from_orm(cls, row: Any) -> Message:
         from database.models import Messages as MessagesRow

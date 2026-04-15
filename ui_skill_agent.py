@@ -254,11 +254,14 @@ def _apply_chat_view_style(chat: QTextEdit) -> None:
 class ChatSessionTab(QWidget):
     """单个会话标签页：绑定 conversation_id 与聊天记录控件。"""
 
-    def __init__(self, conversation_id: str) -> None:
+    def __init__(self, conversation_id: str, *, pending_db_history: bool = False) -> None:
         super().__init__()
         self.conversation_id = (conversation_id or "").strip()
+        self.pending_db_history = pending_db_history
         self.chat_view = QTextEdit()
         _apply_chat_view_style(self.chat_view)
+        if pending_db_history:
+            self.chat_view.setPlaceholderText("请点击本会话标签，加载数据库中的历史聊天记录…")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -311,11 +314,8 @@ class SkillAgentMainWindow(QMainWindow):
         self.chat_tabs.setMovable(True)
         self.chat_tabs.tabCloseRequested.connect(self._on_tab_close_requested)
         self.chat_tabs.currentChanged.connect(self._on_current_tab_changed)
+        self.chat_tabs.tabBar().tabBarClicked.connect(self._on_tab_bar_clicked)
         self.chat_tabs.setMinimumHeight(280)
-
-        first = ChatSessionTab(self.skill_agent.conversation_id)
-        self.chat_tabs.addTab(first, _tab_title_for_conversation(first.conversation_id))
-        self.chat_tabs.setTabToolTip(0, first.conversation_id)
 
         chat_wrap = QVBoxLayout()
         chat_wrap.setSpacing(4)
@@ -340,6 +340,76 @@ class SkillAgentMainWindow(QMainWindow):
         row.addWidget(self.send_btn)
         layout.addLayout(row)
 
+        self._populate_initial_tabs()
+
+    def _replay_messages_to_chat(self, chat_view: QTextEdit, records: list[dict]) -> None:
+        """按库中顺序把消息画回聊天区（与运行时 log_callback 展示规则尽量一致）。"""
+        show_tool_ui = config.SKILL_AGENT_UI_SHOW_TOOL_CALLS
+        for m in records:
+            role = str(m.get("role") or "")
+            content = str(m.get("content") or "")
+            meta = m.get("metadata")
+            if not isinstance(meta, dict):
+                meta = {}
+            mt = meta.get("type")
+            name = str(meta.get("name") or m.get("name") or "")
+
+            if role == "system":
+                continue
+            if role == "user" and mt == "skill_content":
+                continue
+            if not content.strip() and role != "tool":
+                continue
+
+            if role == "user":
+                self._append_user(chat_view, content)
+            elif role == "assistant":
+                if mt == "think":
+                    self._append_assistant_think_markdown(chat_view, content)
+                else:
+                    self._append_assistant_markdown(chat_view, content)
+            elif role == "tool":
+                if not show_tool_ui:
+                    continue
+                if name == "select_skill" or meta.get("type") == "skill":
+                    self._append_doc_markdown(chat_view, content)
+                else:
+                    self._append_tool_line(chat_view, content)
+
+    def _populate_initial_tabs(self) -> None:
+        sessions = [
+            c
+            for c in self.skill_agent.list_saved_conversations()
+            if (c.conversation_id or "").strip()
+        ]
+        if not sessions:
+            cid, title = self.skill_agent.start_new_conversation()
+            tab = ChatSessionTab(cid, pending_db_history=False)
+            idx = self.chat_tabs.addTab(tab, title or _tab_title_for_conversation(cid))
+            self.chat_tabs.setTabToolTip(idx, cid)
+            self.skill_agent.set_conversation_id(cid)
+            return
+        for conv in sessions:
+            cid = (conv.conversation_id or "").strip()
+            tab = ChatSessionTab(cid, pending_db_history=True)
+            disp = (conv.title or "").strip() or _tab_title_for_conversation(cid)
+            idx = self.chat_tabs.addTab(tab, disp)
+            self.chat_tabs.setTabToolTip(idx, cid)
+        self.chat_tabs.setCurrentIndex(0)
+        self.skill_agent.set_conversation_id((sessions[0].conversation_id or "").strip())
+        first_tab = self.chat_tabs.widget(0)
+        if isinstance(first_tab, ChatSessionTab):
+            self._ensure_tab_history_loaded(first_tab)
+
+    def _ensure_tab_history_loaded(self, tab: ChatSessionTab) -> None:
+        """仅在需要时调用 Memory 拉取消息并渲染；不触发大模型。"""
+        if not tab.pending_db_history:
+            return
+        tab.pending_db_history = False
+        tab.chat_view.setPlaceholderText("对话记录将显示在这里…")
+        records = self.skill_agent.message_records_for_conversation(tab.conversation_id)
+        self._replay_messages_to_chat(tab.chat_view, records)
+
     def _active_session_tab(self) -> ChatSessionTab | None:
         w = self.chat_tabs.currentWidget()
         return w if isinstance(w, ChatSessionTab) else None
@@ -352,6 +422,12 @@ class SkillAgentMainWindow(QMainWindow):
         tab = self._active_session_tab()
         if tab is not None:
             self.skill_agent.set_conversation_id(tab.conversation_id)
+
+    def _on_tab_bar_clicked(self, index: int) -> None:
+        """用户点击标签栏时才拉取并渲染该会话的数据库消息（大模型仍在用户点击发送后由 run 触发）。"""
+        w = self.chat_tabs.widget(index)
+        if isinstance(w, ChatSessionTab):
+            self._ensure_tab_history_loaded(w)
 
     def _on_tab_close_requested(self, index: int) -> None:
         if self.chat_tabs.count() <= 1:
@@ -390,7 +466,7 @@ class SkillAgentMainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "当前仍有对话在执行，请结束后再新建会话。")
             return
         cid, default_title = self.skill_agent.start_new_conversation()
-        tab = ChatSessionTab(cid)
+        tab = ChatSessionTab(cid, pending_db_history=False)
         idx = self.chat_tabs.addTab(tab, default_title or _tab_title_for_conversation(cid))
         self.chat_tabs.setTabToolTip(idx, cid)
         self.chat_tabs.setCurrentIndex(idx)

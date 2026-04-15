@@ -12,6 +12,7 @@ from executor import Executor
 from llm import get_chat_model
 from llm.BaseChatModel import BaseChatModel
 from memory import Memory
+from memory.conversation import Conversation
 from skill import (
     SkillRegistry,
     build_skills_catalog_text,
@@ -67,9 +68,10 @@ class SkillAgent:
         self.memory = memory
         self.username = username
         if memory is not None:
-            self._conversation_id = conversation_id or str(uuid.uuid4())
+            cid = (conversation_id or "").strip()
+            self._conversation_id = cid
         else:
-            self._conversation_id = conversation_id or ""
+            self._conversation_id = (conversation_id or "").strip()
         self._tool_ctx = ToolContext(work_dir=self.work_dir, executor=executor)
         self._definitions = list(SKILL_CONTROL_TOOL_DEFINITIONS) + list(all_definition_dicts())
 
@@ -95,6 +97,18 @@ class SkillAgent:
     def set_conversation_id(self, conversation_id: str) -> None:
         """切换到已有或新建的 conversation（与多标签页联动）。"""
         self._conversation_id = (conversation_id or "").strip()
+
+    def list_saved_conversations(self) -> list[Conversation]:
+        """从持久化层读取当前用户下全部会话（无 Memory 时为空）。"""
+        if self.memory is None:
+            return []
+        return self.memory.list_user_conversations()
+
+    def message_records_for_conversation(self, conversation_id: str) -> list[dict[str, Any]]:
+        """某会话的完整消息记录（含 metadata），用于界面恢复历史。"""
+        if self.memory is None:
+            return []
+        return self.memory.get_message_records((conversation_id or "").strip())
 
     def _merged_tools(self, model: BaseChatModel) -> list[dict]:
         return tools_for_model(model, self._definitions)

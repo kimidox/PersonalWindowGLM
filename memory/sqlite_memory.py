@@ -4,10 +4,9 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from database import engine, get_session
+from database import get_session
 from database.models import Conversations, Messages, User
 from memory.conversation import Conversation
 from memory.memory import Memory
@@ -120,13 +119,40 @@ class SqliteMemory(Memory):
             rows = rows[-limit:]
         return [Message.from_orm(r).to_llm_dict() for r in rows]
 
+    def get_message_records(
+        self,
+        conversation_id: str,
+        *,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        with get_session() as db:
+            q = (
+                db.query(Messages)
+                .filter(Messages.conversation_id == conversation_id)
+                .order_by(Messages.id.asc())
+            )
+            rows = q.all()
+        if limit is not None and limit > 0:
+            rows = rows[-limit:]
+        return [Message.from_orm(r).to_record_dict() for r in rows]
+
+    def list_user_conversations(self) -> list[Conversation]:
+        with get_session() as db:
+            user = db.query(User).filter(User.username == self._username).first()
+            if not user:
+                return []
+            rows = (
+                db.query(Conversations)
+                .filter(Conversations.user_id == str(user.uuid))
+                .order_by(Conversations.updated_at.desc())
+                .all()
+            )
+        return [Conversation.from_orm(r) for r in rows]
+
     def clear_conversation(self, conversation_id: str) -> None:
         with get_session() as db:
             db.query(Messages).filter(Messages.conversation_id == conversation_id).delete()
-            conv = db.query(Conversations).filter(Conversations.conversation_id == conversation_id).first()
-            if conv:
-                conv.active_skill_ids = []
-                conv.updated_at = datetime.now()
+            db.query(Conversations).filter(Conversations.conversation_id == conversation_id).delete()
             db.commit()
 
     def set_active_skills(self, conversation_id: str, skill_ids: list[str]) -> None:
