@@ -244,7 +244,7 @@ class SkillAgent:
                 r = str(result)
                 if len(r) > 12000:
                     r = r[:12000] + "\n\n…（内容已截断）"
-                log_callback(r, "assistant")
+                log_callback(r, "base_tool")
 
             if terminate and final is not None:
                 # 正常执行结束，最后回答非空

@@ -490,7 +490,7 @@ class SkillAgentMainWindow(QMainWindow):
 
     def _on_log(self, message: str, msg_type: str, target_chat: QTextEdit) -> None:
         show_tool_ui = config.SKILL_AGENT_UI_SHOW_TOOL_CALLS
-        if msg_type == "tool":
+        if msg_type in ("tool","base_tool"):
             if show_tool_ui:
                 self._append_tool_line(target_chat, message)
         elif msg_type == "doc":
