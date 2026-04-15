@@ -1,5 +1,19 @@
 # PersonalWindowGLM · SkillAgent
 
+## Screenshots
+
+The following images are from the SkillAgent desktop UI (`ui_skill_agent`). Source files live under `doc/` in this repository.
+
+![SkillAgent UI screenshot 1](doc/img.png)
+
+![SkillAgent UI screenshot 2](doc/img_1.png)
+
+![SkillAgent UI screenshot 3](doc/img_2.png)
+
+![SkillAgent UI screenshot 4](doc/img_3.png)
+
+---
+
 A **SkillAgent** built on LLM tool calling: business rules live as Skill documents on disk. The agent **loads them on demand**, **combines multiple Skills** as constraints, and uses **atomic tools** inside a bounded workspace for file I/O and optional desktop automation.
 
 ---
@@ -86,7 +100,15 @@ Each Skill also lives in its **own top-level folder**, so attachments, templates
 - **Human-editable rules**: Markdown + light front matter; low barrier for non-developers.  
 - **Clear separation**: control plane (Skills) vs. execution plane (atomic tools), easier to trace what the model decided vs. what it did.  
 - **Step cap**: `SKILL_AGENT_MAX_STEPS` (from env via `config.py`) bounds tool loops.  
-- **Observability**: `run(..., log_callback=...)` can log tool calls, Skill loads, and truncated tool outputs (useful for the Qt UI).
+- **Observability**: `run(..., log_callback=...)` can log reasoning snippets, tool calls, full Skill loads, and truncated atomic-tool output (the Qt UI styles these by message type).
+
+---
+
+## Conversation persistence and Skill visibility
+
+- **Optional `Memory`**: when `memory` and `conversation_id` are set, `run` rebuilds history (without stale system rows), regenerates system from the current catalog, and persists tool turns and injected Skill bodies for follow-up turns and UI restore.  
+- **Desktop default**: `ui_skill_agent` wires `SqliteMemory` (`config.DEFAULT_SKILL_AGENT_USER`), multi-tab conversations (`start_new_conversation` / `set_conversation_id`), and DB-backed history.  
+- **Disabling Skills**: `skill_agent_preferences.load_disabled_skill_ids()` reads `skill_agent_disabled_skills.json` at the project root; disabled ids are omitted from the catalog and cannot be selected. The in-app settings dialog edits this set.
 
 ---
 
@@ -99,13 +121,11 @@ Via `.env.dev` and `config.py`, typical keys include:
 - `SKILL_AGENT_MAX_STEPS` — max tool steps per user turn.  
 - `OPENAI_*` / `MODEL_NAME` — API and model.
 
-**Note:** `skills_auto_matched_for_query` and `SKILL_AGENT_AUTO_LOAD` exist in `skill/processing.py` and `config.py`, but **`SkillAgent.run` does not call them yet**. Document “auto-inject Skills from the user query” only after wiring that in.
-
----
-
 ## Entry point
 
-`main.py` currently starts the SkillAgent UI (`ui_skill_agent`), which constructs `SkillAgent(work_dir, executor=Executor(work_dir))`.
+`main.py` currently starts the SkillAgent UI (`ui_skill_agent`), which constructs `SkillAgent(work_dir, executor=Executor(work_dir), memory=SqliteMemory(...), username=...)` and runs `run` on a worker thread while updating the chat / log views.
+
+**Note:** `skills_auto_matched_for_query` and `SKILL_AGENT_AUTO_LOAD` exist in `skill/processing.py` and `config.py`, but **`SkillAgent.run` does not call them yet**. Treat “auto-inject Skills from the user query” as future work until the main loop wires that in.
 
 ---
 

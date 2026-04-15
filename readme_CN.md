@@ -1,5 +1,19 @@
 # PersonalWindowGLM · SkillAgent
 
+## 界面预览
+
+下列截图为当前 SkillAgent 桌面端（`ui_skill_agent`）相关界面，资源位于仓库 `doc/` 目录。
+
+![SkillAgent 界面截图 1](doc/img.png)
+
+![SkillAgent 界面截图 2](doc/img_1.png)
+
+![SkillAgent 界面截图 3](doc/img_2.png)
+
+![SkillAgent 界面截图 4](doc/img_3.png)
+
+---
+
 基于大模型工具调用的 **SkillAgent**：把业务规范写成磁盘上的 Skill 文档，由 Agent **按需加载**、**组合多条 Skill** 约束，并通过 **原子工具** 在受限工作区内完成读写目录与桌面自动化等操作。
 
 ---
@@ -86,7 +100,15 @@ Agent 在系统提示中只看到 **Skill 列表摘要**；完整流程在模型
 - **人机可读规范**：Skill 即 Markdown + 轻量 frontmatter，非程序员也可维护。  
 - **工具面清晰**：控制面（Skill）与执行面（原子工具）分离，便于审计模型在「选规范」与「动手」上的行为。  
 - **步数上限**：`SKILL_AGENT_MAX_STEPS`（默认来自环境配置）防止无限工具循环。  
-- **可观测性**：`run(..., log_callback=...)` 可记录工具调用、Skill 加载与截断后的工具返回（便于 UI 展示）。
+- **可观测性**：`run(..., log_callback=...)` 可记录推理摘要、工具调用、Skill 全文加载与截断后的原子工具返回（Qt 界面按类型着色展示）。
+
+---
+
+## 会话持久化与 Skill 可见性
+
+- **`Memory` 可选**：传入 `memory` 与 `conversation_id` 时，`run` 会在每轮前拼接历史消息（不含旧 system），并用当前 Skill 目录重新生成 system；工具轮次与「已加载 Skill」正文会写入持久化层，便于多轮对话与界面恢复。  
+- **桌面端默认**：`ui_skill_agent` 使用 `SqliteMemory`（用户名为 `config.DEFAULT_SKILL_AGENT_USER`），支持多标签页会话（`start_new_conversation` / `set_conversation_id`）、从库中拉取历史消息等。  
+- **禁用部分 Skill**：`skill_agent_preferences.load_disabled_skill_ids()` 读取项目根下的 `skill_agent_disabled_skills.json`；被禁用的 Skill 不会出现在目录摘要中，也无法被 `select_skill` 选中。设置界面可维护该列表。
 
 ---
 
@@ -103,7 +125,9 @@ Agent 在系统提示中只看到 **Skill 列表摘要**；完整流程在模型
 
 ## 运行入口
 
-主程序当前默认启动 SkillAgent 界面（`main.py` → `ui_skill_agent`）：内部使用 `SkillAgent(work_dir, executor=Executor(work_dir))`。
+主程序当前默认启动 SkillAgent 界面（`main.py` → `ui_skill_agent`）：内部构造 `SkillAgent(work_dir, executor=Executor(work_dir), memory=SqliteMemory(...), username=...)`，在独立线程中调用 `run` 并刷新聊天与日志视图。
+
+**说明**：`skill/processing.py` 中的 `skills_auto_matched_for_query` 与配置项 `SKILL_AGENT_AUTO_LOAD` 已存在，但 **`SkillAgent.run` 当前未调用自动匹配**；自动按用户问题预注入 Skill 需在主循环中另行接线后再写入文档。
 
 ---
 
