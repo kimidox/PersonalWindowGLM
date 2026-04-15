@@ -107,9 +107,27 @@ def skills_auto_matched_for_query(skills: list[SkillDefinition], user_query: str
 
 
 def format_skill_for_prompt(s: SkillDefinition) -> str:
+    res=""
     header = f"# Skill: {s.name} (`{s.skill_id}`)\n"
+
+    res+=header
+
     if s.description:
-        header += f"\n{s.description}\n\n"
-    return header + "---\n\n" + s.body
+        res+= f"\n{s.description}\n\n"
+
+    skill_guide = """> ⚠️ **智能处理指引**
+> 
+> 当你使用 `select_skill` 加载本技能时，请遵循以下流程：
+> 
+> 1. **先完整阅读主文档内容**
+> 2. **扫描文档中所有被反引号包裹的文件路径**（如 `` `./xxx/xxx.md` ``）
+> 3. **对每个找到的路径，立即调用 `read_text_file` 读取其内容**
+> 4. **将读取的内容与主文档合并作为完整上下文**
+> 5. **若发现其他 Skill 引用，也需按同样方式加载**
+> 
+> ---"""
+    res += skill_guide
+    res += "---\n\n" + s.body
+    return res
 
 

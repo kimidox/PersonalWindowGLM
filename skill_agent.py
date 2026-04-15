@@ -220,6 +220,8 @@ class SkillAgent:
                     log_callback(f"调用工具 `{fname}` · {args_s}", "tool")
                 else:
                     log_callback(f"{msg.model_extra['reasoning_content']}","think")
+            if self.memory is not None:
+                self.memory.append_message(self._conversation_id, "assistant", msg.model_extra["reasoning_content"],metadata={"type":"think"})
             # 执行tool
             result, terminate, final = self._dispatch(fname, args, active_skill_text, active_skill_ids)
 
