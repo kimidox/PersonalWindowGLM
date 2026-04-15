@@ -4,9 +4,10 @@ import json
 import re
 import sys
 from html import escape
+from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QFont, QTextCursor
+from PySide6.QtCore import QPointF, Qt, QThread, Signal, QSize
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -20,7 +21,10 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStyleFactory,
+    QTabBar,
     QTabWidget,
+    QToolButton,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -34,6 +38,55 @@ from skill_agent import SkillAgent
 from skill_agent_preferences import load_disabled_skill_ids, save_disabled_skill_ids
 
 
+def _load_ui_style_sections() -> dict[str, str]:
+    """从 ui_skill_agent_styles.css 解析 /* === section:<id> === */ 分块为字典。"""
+    css_path = Path(__file__).with_name("ui_skill_agent_styles.css")
+    raw = css_path.read_text(encoding="utf-8")
+    parts = re.split(r"/\* === section:(\w+) === \*/", raw)
+    if len(parts) < 2:
+        return {}
+    out: dict[str, str] = {}
+    for i in range(1, len(parts), 2):
+        key = parts[i]
+        body = parts[i + 1].strip() if i + 1 < len(parts) else ""
+        out[key] = body
+    return out
+
+
+_UI_STYLES = _load_ui_style_sections()
+
+_TAB_CLOSE_BTN_OBJECT_NAME = "skillAgentTabCloseButton"
+_TAB_CLOSE_ICON: QIcon | None = None
+
+
+def _tab_close_pixmap(px: int, color: QColor) -> QPixmap:
+    """绘制与主界面一致的细线 ×（避免 QStyle 系统图标灰框、风格割裂）。"""
+    pm = QPixmap(px, px)
+    pm.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pm)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(color)
+    pen.setWidthF(max(1.35, px * 0.105))
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    m = px * 0.3
+    painter.drawLine(QPointF(m, m), QPointF(px - m, px - m))
+    painter.drawLine(QPointF(px - m, m), QPointF(m, px - m))
+    painter.end()
+    return pm
+
+
+def _tab_close_icon() -> QIcon:
+    global _TAB_CLOSE_ICON
+    if _TAB_CLOSE_ICON is None:
+        # 与 ui_skill_agent_styles.css 中 slate / 主色体系一致
+        base = QColor("#64748b")
+        ico = QIcon()
+        for d in (16, 20, 24):
+            ico.addPixmap(_tab_close_pixmap(d, base))
+        _TAB_CLOSE_ICON = ico
+    return _TAB_CLOSE_ICON
 
 
 class SkillAgentWorkerThread(QThread):
@@ -83,10 +136,8 @@ def _markdown_fragment_html(markdown: str) -> str:
     inner = m.group(1).strip() if m else ""
     if not inner:
         return f"<p>{escape(md).replace(chr(10), '<br/>')}</p>"
-    return (
-        f'<div style="font-size:10pt;font-family:\'Microsoft YaHei\',\'Segoe UI\',sans-serif;'
-        f'color:#263238;">{inner}</div>'
-    )
+    wrap = _UI_STYLES["markdown_fragment_wrapper"]
+    return f'<div style="{wrap}">{inner}</div>'
 
 
 def _plain_block_html(text: str) -> str:
@@ -119,6 +170,7 @@ class SkillAgentSettingsDialog(QDialog):
 
     def __init__(self, parent: QWidget | None, skill_agent: SkillAgent) -> None:
         super().__init__(parent)
+        self.setObjectName("skillAgentSettingsDialog")
         self.setWindowTitle("会话与模型设置")
         self.setModal(True)
         self.resize(560, 520)
@@ -127,6 +179,7 @@ class SkillAgentSettingsDialog(QDialog):
         self._skill_checks: list[tuple[str, QCheckBox]] = []
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(14, 14, 14, 14)
         root.setSpacing(10)
 
         lm = QLabel("当前大模型")
@@ -164,29 +217,36 @@ class SkillAgentSettingsDialog(QDialog):
         self._skills_scroll.setWidgetResizable(True)
         self._skills_scroll.setMinimumHeight(200)
         self._skills_inner = QWidget()
+        self._skills_inner.setObjectName("skillAgentSettingsSkillsInner")
         self._skills_layout = QVBoxLayout(self._skills_inner)
-        self._skills_layout.setContentsMargins(4, 4, 4, 4)
+        self._skills_layout.setContentsMargins(8, 8, 8, 8)
         self._skills_layout.setSpacing(6)
         self._skills_scroll.setWidget(self._skills_inner)
         root.addWidget(self._skills_scroll, stretch=1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_btn = buttons.button(QDialogButtonBox.StandardButton.Close)
+        if close_btn is not None:
+            close_btn.setText("关闭")
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
 
+        self.setStyleSheet(_UI_STYLES["settings_dialog_stylesheet"])
         self._repopulate_skill_rows()
         self._refresh_llm_block()
 
     def _refresh_llm_block(self) -> None:
         m = get_chat_model()
-        self._model_label.setText(f"<span style='font-family:Consolas,monospace'>{escape(m.model_name or '')}</span>")
+        mono = _UI_STYLES["settings_model_name_span"]
+        self._model_label.setText(f"<span style='{mono}'>{escape(m.model_name or '')}</span>")
         self._params_edit.setPlainText(_llm_request_params_text())
 
     def _repopulate_skill_rows(self) -> None:
         self._skill_checks.clear()
         self._skills_inner = QWidget()
+        self._skills_inner.setObjectName("skillAgentSettingsSkillsInner")
         self._skills_layout = QVBoxLayout(self._skills_inner)
-        self._skills_layout.setContentsMargins(4, 4, 4, 4)
+        self._skills_layout.setContentsMargins(8, 8, 8, 8)
         self._skills_layout.setSpacing(6)
         # setWidget 会接管并销毁滚动区里原来的 widget，不可再对旧指针 deleteLater
         self._skills_scroll.setWidget(self._skills_inner)
@@ -226,12 +286,6 @@ class SkillAgentSettingsDialog(QDialog):
         self._refresh_llm_block()
 
 
-CHAT_DOCUMENT_STYLESHEET = (
-    "body { margin: 0; } p { margin-top: 4px; margin-bottom: 4px; } "
-    "ul { margin: 4px 0; padding-left: 22px; } h1,h2,h3 { margin: 8px 0 4px; }"
-)
-
-
 def _tab_title_for_conversation(conversation_id: str) -> str:
     c = (conversation_id or "").strip()
     if len(c) >= 10:
@@ -244,11 +298,9 @@ def _apply_chat_view_style(chat: QTextEdit) -> None:
     chat.setFont(QFont("Microsoft YaHei", 10))
     chat.setAcceptRichText(True)
     chat.setPlaceholderText("对话记录将显示在这里…")
-    chat.setStyleSheet(
-        "QTextEdit { background-color: #fafafa; border: 1px solid #e0e0e0; border-radius: 8px; }"
-    )
+    chat.setStyleSheet(_UI_STYLES["chat_view_qtextedit"])
     chat.setMinimumHeight(200)
-    chat.document().setDefaultStyleSheet(CHAT_DOCUMENT_STYLESHEET)
+    chat.document().setDefaultStyleSheet(_UI_STYLES["chat_document_default"])
 
 
 class ChatSessionTab(QWidget):
@@ -288,6 +340,7 @@ class SkillAgentMainWindow(QMainWindow):
         self.setGeometry(120, 120, 780, 620)
 
         central = QWidget()
+        central.setObjectName("skillAgentCentral")
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -296,12 +349,14 @@ class SkillAgentMainWindow(QMainWindow):
         chat_header = QHBoxLayout()
         chat_header.addStretch(1)
         self.new_conversation_btn = QPushButton("新增会话")
+        self.new_conversation_btn.setObjectName("skillAgentToolbarButton")
         self.new_conversation_btn.setFont(QFont("Microsoft YaHei", 9))
         self.new_conversation_btn.setFixedHeight(28)
         self.new_conversation_btn.setToolTip("新建一个会话标签页（新的 conversation_id）")
         self.new_conversation_btn.clicked.connect(self._on_new_conversation)
         chat_header.addWidget(self.new_conversation_btn, alignment=Qt.AlignmentFlag.AlignRight)
         self.settings_btn = QPushButton("设置")
+        self.settings_btn.setObjectName("skillAgentToolbarButton")
         self.settings_btn.setFont(QFont("Microsoft YaHei", 9))
         self.settings_btn.setFixedHeight(28)
         self.settings_btn.setToolTip("模型、LLM 参数与 Skill 启用状态")
@@ -316,6 +371,7 @@ class SkillAgentMainWindow(QMainWindow):
         self.chat_tabs.currentChanged.connect(self._on_current_tab_changed)
         self.chat_tabs.tabBar().tabBarClicked.connect(self._on_tab_bar_clicked)
         self.chat_tabs.setMinimumHeight(280)
+        self.chat_tabs.tabBar().setDrawBase(False)
 
         chat_wrap = QVBoxLayout()
         chat_wrap.setSpacing(4)
@@ -332,6 +388,7 @@ class SkillAgentMainWindow(QMainWindow):
         self.input_edit.setMinimumHeight(36)
         self.input_edit.returnPressed.connect(self._on_send)
         self.send_btn = QPushButton("发送")
+        self.send_btn.setObjectName("skillAgentSendButton")
         self.send_btn.setFont(QFont("Microsoft YaHei", 10))
         self.send_btn.setMinimumHeight(36)
         self.send_btn.setMinimumWidth(88)
@@ -340,7 +397,48 @@ class SkillAgentMainWindow(QMainWindow):
         row.addWidget(self.send_btn)
         layout.addLayout(row)
 
+        self.setStyleSheet(_UI_STYLES["main_window_stylesheet"])
         self._populate_initial_tabs()
+        self._refresh_tab_close_buttons()
+
+    def _refresh_tab_close_buttons(self) -> None:
+        """用自绘图标的 QToolButton 替换标签关闭子控件（与主色 / slate 体系统一）。"""
+        bar = self.chat_tabs.tabBar()
+        if not bar.tabsClosable():
+            return
+        for i in range(bar.count()):
+            self._ensure_custom_tab_close_button(bar, i)
+
+    def _ensure_custom_tab_close_button(self, bar: QTabBar, index: int) -> None:
+        existing = bar.tabButton(index, QTabBar.ButtonPosition.RightSide)
+        if (
+            isinstance(existing, QToolButton)
+            and existing.objectName() == _TAB_CLOSE_BTN_OBJECT_NAME
+        ):
+            existing.setIcon(_tab_close_icon())
+            existing.setIconSize(QSize(14, 14))
+            return
+        btn = QToolButton(bar)
+        btn.setObjectName(_TAB_CLOSE_BTN_OBJECT_NAME)
+        btn.setAutoRaise(True)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setIcon(_tab_close_icon())
+        btn.setIconSize(QSize(14, 14))
+        btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        btn.setFixedSize(20, 20)
+        btn.setToolTip("关闭会话")
+        btn.clicked.connect(
+            lambda _c=False, b=btn: self._on_skill_agent_tab_close_clicked(b)
+        )
+        bar.setTabButton(index, QTabBar.ButtonPosition.RightSide, btn)
+
+    def _on_skill_agent_tab_close_clicked(self, btn: QToolButton) -> None:
+        bar = self.chat_tabs.tabBar()
+        for i in range(bar.count()):
+            if bar.tabButton(i, QTabBar.ButtonPosition.RightSide) is btn:
+                self._on_tab_close_requested(i)
+                return
 
     def _replay_messages_to_chat(self, chat_view: QTextEdit, records: list[dict]) -> None:
         """按库中顺序把消息画回聊天区（与运行时 log_callback 展示规则尽量一致）。"""
@@ -452,8 +550,9 @@ class SkillAgentMainWindow(QMainWindow):
     def _insert_row(self, chat_view: QTextEdit, inner_html: str, *, align: str) -> None:
         al = "right" if align == "right" else "left"
         chat_view.moveCursor(QTextCursor.End)
+        row_margin = _UI_STYLES["chat_message_row_table"]
         chat_view.insertHtml(
-            f'<table width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 14px 0;">'
+            f'<table width="100%" cellspacing="0" cellpadding="0" style="{row_margin}">'
             f'<tr><td align="{al}">{inner_html}</td></tr></table>'
         )
         self._scroll_to_end(chat_view)
@@ -474,51 +573,54 @@ class SkillAgentMainWindow(QMainWindow):
             f"已新建会话标签页，后续消息将写入本页对应的 conversation。\nconversation_id：{cid}"
         )
         self._append_assistant_card(tab.chat_view, hint, subtitle="系统")
+        self._refresh_tab_close_buttons()
 
     def _append_user(self, chat_view: QTextEdit, text: str) -> None:
         body = _plain_block_html(text)
+        st_o = _UI_STYLES["chat_bubble_user_outer"]
+        st_c = _UI_STYLES["chat_bubble_user_caption"]
+        st_b = _UI_STYLES["chat_bubble_user_body"]
         bubble = (
-            f'<div style="display:inline-block;max-width:88%;text-align:left;'
-            f"background-color:#e3f2fd;border-radius:12px;padding:10px 14px;"
-            f'border:1px solid #bbdefb;">'
-            f'<div style="font-size:11px;color:#0d47a1;font-weight:600;margin-bottom:6px;">用户</div>'
-            f'<div style="color:#263238;">{body}</div></div>'
+            f'<div style="{st_o}">'
+            f'<div style="{st_c}">用户</div>'
+            f'<div style="{st_b}">{body}</div></div>'
         )
         self._insert_row(chat_view, bubble, align="right")
 
     def _append_assistant_card(
         self, chat_view: QTextEdit, body_html: str, *, subtitle: str = "助手"
     ) -> None:
+        st_o = _UI_STYLES["chat_bubble_assistant_outer"]
+        st_c = _UI_STYLES["chat_bubble_assistant_caption"]
+        st_b = _UI_STYLES["chat_bubble_assistant_body"]
         bubble = (
-            f'<div style="display:inline-block;max-width:92%;text-align:left;'
-            f"background-color:#f1f8e9;border-radius:12px;padding:10px 14px;"
-            f'border:1px solid #c5e1a5;">'
-            f'<div style="font-size:11px;color:#1b5e20;font-weight:600;margin-bottom:6px;">'
-            f"{escape(subtitle)}</div>"
-            f'<div style="color:#263238;">{body_html}</div></div>'
+            f'<div style="{st_o}">'
+            f'<div style="{st_c}">{escape(subtitle)}</div>'
+            f'<div style="{st_b}">{body_html}</div></div>'
         )
         self._insert_row(chat_view, bubble, align="left")
     def _append_assistant_think_card(
         self, chat_view: QTextEdit, body_html: str, *, subtitle: str = "助手"
     ) -> None:
+        st_o = _UI_STYLES["chat_bubble_think_outer"]
+        st_c = _UI_STYLES["chat_bubble_think_caption"]
+        st_b = _UI_STYLES["chat_bubble_think_body"]
         bubble = (
-            f'<div style="display:inline-block;max-width:92%;text-align:left;'
-            f"background-color:#f0f0f0;border-radius:12px;padding:10px 14px;"
-            f'border:1px solid #dddddd;">'
-            f'<div style="font-size:11px;color:#555555;font-weight:600;margin-bottom:6px;">'
-            f"{escape(subtitle)}</div>"
-            f'<div style="color:#263238;">{body_html}</div></div>'
+            f'<div style="{st_o}">'
+            f'<div style="{st_c}">{escape(subtitle)}</div>'
+            f'<div style="{st_b}">{body_html}</div></div>'
         )
         self._insert_row(chat_view, bubble, align="left")
 
     def _append_tool_line(self, chat_view: QTextEdit, text: str) -> None:
         safe = escape(_normalize_newlines(text))
+        st_o = _UI_STYLES["chat_tool_outer"]
+        st_cap = _UI_STYLES["chat_tool_caption"]
+        st_txt = _UI_STYLES["chat_tool_text"]
         inner = (
-            f'<div style="display:inline-block;max-width:92%;text-align:left;'
-            f"background-color:#eceff1;border-radius:8px;padding:8px 12px;"
-            f'border:1px solid #cfd8dc;">'
-            f'<span style="font-size:11px;font-weight:600;color:#37474f;">工具</span>'
-            f'<span style="font-size:11px;color:#546e7a;"> · {safe}</span></div>'
+            f'<div style="{st_o}">'
+            f'<span style="{st_cap}">工具</span>'
+            f'<span style="{st_txt}"> · {safe}</span></div>'
         )
         self._insert_row(chat_view, inner, align="left")
 
@@ -590,6 +692,10 @@ class SkillAgentMainWindow(QMainWindow):
 
 def main() -> None:
     app = QApplication(sys.argv)
+    # Windows 原生样式下标签关闭按钮常忽略 QSS；Fusion 下排版与配色更可控。
+    fusion = QStyleFactory.create("Fusion")
+    if fusion is not None:
+        app.setStyle(fusion)
     w = SkillAgentMainWindow()
     w.show()
     sys.exit(app.exec())
