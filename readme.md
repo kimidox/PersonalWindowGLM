@@ -1,5 +1,7 @@
 # PersonalWindowGLM · SkillAgent
 
+[中文版readme](./readme_CN.md)
+
 ## Screenshots
 
 The following images are from the SkillAgent desktop UI (`ui_skill_agent`). Source files live under `doc/` in this repository.
