@@ -41,8 +41,8 @@ def _build_system_prompt(catalog: str) -> str:
 ## 工具使用约定
 0. 部分Skill里面描述中若说明仍需其它 Skill，可再 `select_skill`（已自动加载的 id 再选不会重复追加）。
 1. 按需调用 `select_skill` 加载 Skill 全文（可加载一个或多个）。若用户任务明显需要多套规范，请依次 `select_skill`；下文会同时列出本轮已加载的全部 Skill，须一并遵守（若有冲突，以更具体或后加载的说明为准）。
-2. 执行过程中使用原子工具（读取文件、写入文件、列出目录等）完成具体操作。
-3. 部分Skill里面描述说明需要执行相关原子工具时，请确定要传入的path是否带上了当前skill的dir。
+2. 执行过程中使用原子工具（读取文件、写入文件、列出目录、在 Skill 包内运行 `scripts/` 下 Python 等）完成具体操作。
+3. 部分Skill里面描述说明需要执行相关原子工具时，请确定要传入的path是否带上了当前skill的dir；若需执行某 Skill 文档中引用的 `scripts/*.py`，应使用 `run_skill_script` 并传入对应 `skill_id`。
 4. 当你认为已满足用户目标时，调用 `finish`，在参数 `message` 中给出完整、用户可读的最终答复。
 5. 若当前没有可用 Skill，可直接用原子工具与常识完成用户请求，并 `finish` 结束。
 """

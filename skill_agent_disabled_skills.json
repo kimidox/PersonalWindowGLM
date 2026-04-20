@@ -1,3 +1,9 @@
 {
-  "disabled_skill_ids": []
+  "disabled_skill_ids": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5"
+  ]
 }
