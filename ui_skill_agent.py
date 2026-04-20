@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import sys
 from html import escape
 from pathlib import Path
 from typing import Any, Callable
 
-from PySide6.QtCore import QPointF, Qt, QThread, Signal, QSize
+from PySide6.QtCore import QPointF, Qt, QThread, QTimer, Signal, QSize
 from PySide6.QtGui import QColor, QFont, QIcon, QMouseEvent, QPainter, QPen, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -62,6 +63,10 @@ _UI_STYLES = _load_ui_style_sections()
 
 _INPUT_PLACEHOLDER_DEFAULT = "输入业务问题后发送…"
 _INPUT_PLACEHOLDER_AWAIT_USER = "Agent 正在等待你的补充回复…"
+
+# 助手气泡：按字符逐步显示（模型仍是一次性返回，此处为界面流式效果）
+_STREAM_TIMER_MS = 22
+_STREAM_CHARS_PER_TICK = 2
 
 # 待回复卡片内选项区最大高度（超出可滚动），避免选项过多时挤掉「确定」按钮
 _AWAIT_USER_SCROLL_MAX_RATIO = 0.32
@@ -555,6 +560,8 @@ class SkillAgentMainWindow(QMainWindow):
             username=config.DEFAULT_SKILL_AGENT_USER,
         )
         self.worker_thread: SkillAgentWorkerThread | None = None
+        self._assistant_stream_timer: QTimer | None = None
+        self._assistant_stream_state: dict[str, Any] | None = None
         self._init_ui()
 
     def _init_ui(self) -> None:
@@ -836,6 +843,150 @@ class SkillAgentMainWindow(QMainWindow):
         bar.setValue(bar.maximum())
         chat_view.moveCursor(QTextCursor.End)
 
+    @staticmethod
+    def _assistant_stream_marker() -> str:
+        # 使用全零宽字符编码随机 token，避免流式过程中出现可见占位字母。
+        token = secrets.token_hex(10)
+        bits = "".join(format(int(ch, 16), "04b") for ch in token)
+        zw0 = "\u200b"  # zero-width space
+        zw1 = "\u200c"  # zero-width non-joiner
+        encoded = "".join(zw1 if b == "1" else zw0 for b in bits)
+        return "\u2060" + encoded + "\u2060"
+
+    def _stop_assistant_stream_timer(self) -> None:
+        if self._assistant_stream_timer is not None:
+            self._assistant_stream_timer.stop()
+            self._assistant_stream_timer.deleteLater()
+            self._assistant_stream_timer = None
+
+    def _find_stream_marker_span(
+        self, chat_view: QTextEdit, marker_start: str, marker_end: str
+    ) -> tuple[int, int, int, int] | None:
+        """
+        返回 (start_marker_pos, content_start_pos, content_end_pos, end_marker_end_pos)。
+        用双 marker 重新定位区间，避免文档重排导致的绝对位置漂移。
+        """
+        doc = chat_view.document()
+        hit_start = doc.find(marker_start, 0)
+        if hit_start.isNull():
+            return None
+        start_pos = min(hit_start.anchor(), hit_start.position())
+        content_start = max(hit_start.anchor(), hit_start.position())
+        hit_end = doc.find(marker_end, content_start)
+        if hit_end.isNull():
+            return None
+        content_end = min(hit_end.anchor(), hit_end.position())
+        end_marker_end = max(hit_end.anchor(), hit_end.position())
+        return (start_pos, content_start, content_end, end_marker_end)
+
+    def _replace_stream_range_with_markdown(self, chat_view: QTextEdit, marker_start: str, marker_end: str, full: str) -> None:
+        span = self._find_stream_marker_span(chat_view, marker_start, marker_end)
+        if span is None:
+            self._append_assistant_markdown(chat_view, full)
+            return
+        start_marker_pos, _, _, end_marker_end = span
+        doc = chat_view.document()
+        cur = QTextCursor(doc)
+        cur.setPosition(start_marker_pos)
+        cur.setPosition(end_marker_end, QTextCursor.MoveMode.KeepAnchor)
+        cur.removeSelectedText()
+        cur.insertHtml(_markdown_fragment_html(full))
+        self._scroll_to_end(chat_view)
+
+    def _flush_assistant_stream_to_markdown(self) -> None:
+        """将当前流式占位区间替换为完整 Markdown（用于打断或收尾）。"""
+        st = self._assistant_stream_state
+        if st is None:
+            return
+        chat_view: QTextEdit = st["chat_view"]
+        self._replace_stream_range_with_markdown(
+            chat_view, st["marker_start"], st["marker_end"], st["full"]
+        )
+        self._assistant_stream_state = None
+        self._stop_assistant_stream_timer()
+
+    def _assistant_stream_tick(self) -> None:
+        st = self._assistant_stream_state
+        if st is None:
+            self._stop_assistant_stream_timer()
+            return
+        chat_view: QTextEdit = st["chat_view"]
+        full: str = st["full"]
+        n = len(full)
+        step = int(st.get("chars_per_tick") or _STREAM_CHARS_PER_TICK)
+        next_shown = min(n, int(st["shown"]) + max(1, step))
+        marker_start: str = st["marker_start"]
+        marker_end: str = st["marker_end"]
+        span = self._find_stream_marker_span(chat_view, marker_start, marker_end)
+        if span is None:
+            self._assistant_stream_state = None
+            self._stop_assistant_stream_timer()
+            self._append_assistant_markdown(chat_view, full)
+            return
+        _, content_start, content_end, _ = span
+        doc = chat_view.document()
+        cur = QTextCursor(doc)
+        cur.setPosition(content_start)
+        cur.setPosition(content_end, QTextCursor.MoveMode.KeepAnchor)
+        cur.removeSelectedText()
+        cur.insertText(full[:next_shown])
+        st["shown"] = next_shown
+        self._scroll_to_end(chat_view)
+        if next_shown >= n:
+            self._replace_stream_range_with_markdown(
+                chat_view, marker_start, marker_end, full
+            )
+            self._assistant_stream_state = None
+            self._stop_assistant_stream_timer()
+
+    def _append_assistant_markdown_streaming(self, chat_view: QTextEdit, markdown: str) -> None:
+        """助手气泡：先按字符铺开，再一次性替换为 Markdown 渲染结果。"""
+        full = _normalize_newlines(markdown or "")
+        if not full.strip():
+            self._append_assistant_markdown(chat_view, markdown)
+            return
+        if self._assistant_stream_state is not None:
+            self._flush_assistant_stream_to_markdown()
+        marker_start = self._assistant_stream_marker()
+        marker_end = self._assistant_stream_marker()
+        st_o = _UI_STYLES["chat_bubble_assistant_outer"]
+        st_c = _UI_STYLES["chat_bubble_assistant_caption"]
+        st_b = _UI_STYLES["chat_bubble_assistant_body"]
+        body_html = (
+            f'<span style="white-space: pre-wrap;">'
+            f'{escape(marker_start)}{escape(marker_end)}'
+            f'</span>'
+        )
+        bubble = (
+            f'<div style="{st_o}">'
+            f'<div style="{st_c}">{escape("助手")}</div>'
+            f'<div style="{st_b}">{body_html}</div></div>'
+        )
+        row_margin = _UI_STYLES["chat_message_row_table"]
+        row = (
+            f'<table width="100%" cellspacing="0" cellpadding="0" style="{row_margin}">'
+            f'<tr><td align="left">{bubble}</td></tr></table>'
+        )
+        chat_view.moveCursor(QTextCursor.End)
+        chat_view.insertHtml(row)
+        span = self._find_stream_marker_span(chat_view, marker_start, marker_end)
+        if span is None:
+            self._append_assistant_markdown(chat_view, markdown)
+            return
+        self._assistant_stream_state = {
+            "chat_view": chat_view,
+            "marker_start": marker_start,
+            "marker_end": marker_end,
+            "full": full,
+            "shown": 0,
+            "chars_per_tick": _STREAM_CHARS_PER_TICK,
+        }
+        self._assistant_stream_timer = QTimer(self)
+        self._assistant_stream_timer.setInterval(_STREAM_TIMER_MS)
+        self._assistant_stream_timer.timeout.connect(self._assistant_stream_tick)
+        self._assistant_stream_timer.start()
+        self._assistant_stream_tick()
+
     def _insert_row(self, chat_view: QTextEdit, inner_html: str, *, align: str) -> None:
         al = "right" if align == "right" else "left"
         chat_view.moveCursor(QTextCursor.End)
@@ -1020,7 +1171,7 @@ class SkillAgentMainWindow(QMainWindow):
             if show_tool_ui:
                 self._append_doc_markdown(target_chat, message)
         elif msg_type in ("assistant", "response"):
-            self._append_assistant_markdown(target_chat, message)
+            self._append_assistant_markdown_streaming(target_chat, message)
         elif msg_type in ("think",):
             self._append_assistant_think_markdown(target_chat, message)
         elif msg_type == "await_user":
@@ -1039,6 +1190,8 @@ class SkillAgentMainWindow(QMainWindow):
         self._sync_input_placeholder_for_active_tab()
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        if self._assistant_stream_state is not None:
+            self._flush_assistant_stream_to_markdown()
         if self.worker_thread and self.worker_thread.isRunning():
             self.worker_thread.terminate()
             self.worker_thread.wait(2000)
