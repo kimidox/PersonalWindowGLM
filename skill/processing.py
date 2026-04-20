@@ -122,8 +122,9 @@ def format_skill_for_prompt(s: SkillDefinition) -> str:
 > 1. **先完整阅读主文档内容**
 > 2. **扫描文档中所有被反引号包裹的文件路径**（如 `` `./xxx/xxx.md` ``）
 > 3. **对每个找到的路径，立即调用 `read_text_file` 读取其内容**
-> 4. **将读取的内容与主文档合并作为完整上下文**
-> 5. **若发现其他 Skill 引用，也需按同样方式加载**
+> 4. **若文档要求运行本 Skill 包下 `scripts/` 中的 `.py` 脚本，使用原子工具 `run_skill_script`（传入本 skill 的 `skill_id` 与 `script` 路径，如 `scripts/foo.py`），不要用 shell 直接执行**
+> 5. **将读取的内容与主文档合并作为完整上下文**
+> 6. **若发现其他 Skill 引用，也需按同样方式加载**
 > 
 > ---"""
     res += skill_guide
