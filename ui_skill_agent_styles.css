@@ -324,3 +324,10 @@ QPushButton#skillAgentAwaitUserConfirmButton:disabled {
   color: #9ca3af;
   border: 1px solid #e5e7eb;
 }
+QFrame#skillAgentAwaitUserCard QScrollArea#skillAgentAwaitUserScroll {
+  border: none;
+  background-color: transparent;
+}
+QFrame#skillAgentAwaitUserCard QScrollArea#skillAgentAwaitUserScroll > QWidget > QWidget {
+  background-color: transparent;
+}

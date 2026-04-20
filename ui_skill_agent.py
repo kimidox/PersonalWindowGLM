@@ -63,6 +63,11 @@ _UI_STYLES = _load_ui_style_sections()
 _INPUT_PLACEHOLDER_DEFAULT = "输入业务问题后发送…"
 _INPUT_PLACEHOLDER_AWAIT_USER = "Agent 正在等待你的补充回复…"
 
+# 待回复卡片内选项区最大高度（超出可滚动），避免选项过多时挤掉「确定」按钮
+_AWAIT_USER_SCROLL_MAX_RATIO = 0.32
+_AWAIT_USER_SCROLL_MIN_PX = 200
+_AWAIT_USER_SCROLL_MAX_PX = 420
+
 _TAB_CLOSE_BTN_OBJECT_NAME = "skillAgentTabCloseButton"
 _TAB_CLOSE_ICON: QIcon | None = None
 
@@ -183,19 +188,40 @@ class ChatSessionTab(QWidget):
         q_lab = QLabel(question or "（模型未提供具体问题）")
         q_lab.setObjectName("skillAgentAwaitUserQuestion")
         q_lab.setWordWrap(True)
-        self._await_inner.addWidget(q_lab)
-
-        if context:
-            ctx_lab = QLabel(context)
-            ctx_lab.setObjectName("skillAgentAwaitUserHint")
-            ctx_lab.setWordWrap(True)
-            self._await_inner.addWidget(ctx_lab)
 
         if choices:
+            scroll = QScrollArea()
+            scroll.setObjectName("skillAgentAwaitUserScroll")
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            scr = QApplication.primaryScreen()
+            scr_h = scr.availableGeometry().height() if scr is not None else 900
+            scroll.setMaximumHeight(
+                max(
+                    _AWAIT_USER_SCROLL_MIN_PX,
+                    min(_AWAIT_USER_SCROLL_MAX_PX, int(scr_h * _AWAIT_USER_SCROLL_MAX_RATIO)),
+                )
+            )
+            scroll.setMinimumHeight(100)
+            scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+
+            scroll_inner = QWidget()
+            s_layout = QVBoxLayout(scroll_inner)
+            s_layout.setContentsMargins(0, 0, 6, 0)
+            s_layout.setSpacing(8)
+            s_layout.addWidget(q_lab)
+            if context:
+                ctx_lab = QLabel(context)
+                ctx_lab.setObjectName("skillAgentAwaitUserHint")
+                ctx_lab.setWordWrap(True)
+                s_layout.addWidget(ctx_lab)
             hint = QLabel("请选择一个建议回答，点击下方「确定」将立即发送（无需再点发送）：")
             hint.setObjectName("skillAgentAwaitUserHint")
             hint.setWordWrap(True)
-            self._await_inner.addWidget(hint)
+            s_layout.addWidget(hint)
+
             group = QButtonGroup(self._await_user_card)
             group.setExclusive(True)
             selected: dict[str, str | None] = {"text": None}
@@ -211,7 +237,10 @@ class ChatSessionTab(QWidget):
                 row_l.addWidget(rb, alignment=Qt.AlignmentFlag.AlignTop)
                 row_l.addWidget(lab, stretch=1)
                 group.addButton(rb)
-                self._await_inner.addWidget(row)
+                s_layout.addWidget(row)
+
+            scroll.setWidget(scroll_inner)
+            self._await_inner.addWidget(scroll)
 
             confirm_btn = QPushButton("确定")
             confirm_btn.setObjectName("skillAgentAwaitUserConfirmButton")
@@ -235,6 +264,12 @@ class ChatSessionTab(QWidget):
             confirm_btn.clicked.connect(_on_confirm)
             self._await_inner.addWidget(confirm_btn, alignment=Qt.AlignmentFlag.AlignLeft)
         else:
+            self._await_inner.addWidget(q_lab)
+            if context:
+                ctx_lab = QLabel(context)
+                ctx_lab.setObjectName("skillAgentAwaitUserHint")
+                ctx_lab.setWordWrap(True)
+                self._await_inner.addWidget(ctx_lab)
             free = QLabel("未提供固定选项：请在下方输入框自由输入后发送。")
             free.setObjectName("skillAgentAwaitUserHint")
             free.setWordWrap(True)
