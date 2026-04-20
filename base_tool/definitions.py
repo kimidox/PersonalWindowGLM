@@ -10,7 +10,7 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                 "path": {"type": "string", "description": "相对工作目录的文件路径"},
                 "skill_id":{"type": "integer", "description": "path来源的skill_id"}
             },
-            "required": ["path","skill_id"],
+            "required": ["path"],
         },
     },
     {
@@ -23,7 +23,7 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                 "path": {"type": "string", "description": "要写入的相对工作目录的文件路径"},
                 "skill_id": {"type": "integer", "description": "path来源的skill_id"}
             },
-            "required": [ "content","path","skill_id"],
+            "required": [ "content","path"],
         },
     },
     {
@@ -38,7 +38,7 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                 },
                 "skill_id": {"type": "integer", "description": "path来源的skill_id"}
             },
-            "required": ["path","skill_id"],
+            "required": ["path"],
         },
     },
     {
@@ -68,7 +68,7 @@ ATOMIC_TOOL_DEFINITIONS: list[dict] = [
                     "description": "超时秒数，默认 60，最大 180",
                 },
             },
-            "required": ["skill_id", "script"],
+            "required": [ "script"],
         },
     },
 ]
