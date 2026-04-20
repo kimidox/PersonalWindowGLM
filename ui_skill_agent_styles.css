@@ -275,3 +275,52 @@ font-size:11px;font-weight:600;color:#374151;
 
 /* === section:chat_tool_text === */
 font-size:11px;color:#6b7280;
+
+/* -------------------------------------------------------------------------
+ * 组件：ChatSessionTab — 待用户回复（ask_user）底部卡片
+ * ------------------------------------------------------------------------- */
+/* === section:await_user_card_frame === */
+QFrame#skillAgentAwaitUserCard {
+  background-color: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  margin: 0 0 10px 0;
+}
+QFrame#skillAgentAwaitUserCard QLabel#skillAgentAwaitUserQuestion {
+  font-size: 11pt;
+  font-weight: 600;
+  color: #1f2937;
+}
+QFrame#skillAgentAwaitUserCard QLabel#skillAgentAwaitUserHint {
+  font-size: 10pt;
+  color: #6b7280;
+}
+QFrame#skillAgentAwaitUserCard QRadioButton {
+  color: #374151;
+  font-size: 10pt;
+  spacing: 8px;
+}
+QFrame#skillAgentAwaitUserCard QRadioButton::indicator {
+  width: 16px;
+  height: 16px;
+}
+QPushButton#skillAgentAwaitUserConfirmButton {
+  background-color: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 20px;
+  font-weight: 600;
+  min-width: 100px;
+}
+QPushButton#skillAgentAwaitUserConfirmButton:hover:enabled {
+  background-color: #1d4ed8;
+}
+QPushButton#skillAgentAwaitUserConfirmButton:pressed:enabled {
+  background-color: #1e40af;
+}
+QPushButton#skillAgentAwaitUserConfirmButton:disabled {
+  background-color: #e5e7eb;
+  color: #9ca3af;
+  border: 1px solid #e5e7eb;
+}

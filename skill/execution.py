@@ -30,6 +30,30 @@ SKILL_CONTROL_TOOL_DEFINITIONS: list[dict] = [
             "required": ["message"],
         },
     },
+    {
+        "name": "ask_user",
+        "description": (
+            "当缺少关键信息、存在多种合理走向需用户拍板、或必须确认敏感操作前，向用户提问。"
+            "调用后会暂停本轮 Agent，直到用户在输入框回复；用户回复后对话会从你的澄清点继续。"
+            "请勿滥用：同一任务内澄清次数宜少而精。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "向用户提出的具体问题（简洁、可回答）"},
+                "context": {
+                    "type": "string",
+                    "description": "可选：为何需要这条信息，或当前已掌握信息的简要说明",
+                },
+                "choices": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "可选：若干互斥选项；用户可照抄其一回复，也可自由作答",
+                },
+            },
+            "required": ["question"],
+        },
+    },
 ]
 
 
@@ -70,5 +94,30 @@ def execute_skill_control_tool(
     if name == "finish":
         msg = str(args.get("message", "")).strip()
         return (msg or "（完成）", True, msg or "（完成）")
+
+    if name == "ask_user":
+        q = str(args.get("question", "")).strip()
+        if not q:
+            return ("错误：ask_user 需要提供非空的 question。", False, None)
+        lines: list[str] = ["【向你确认】", "", q]
+        ctx = str(args.get("context", "")).strip()
+        if ctx:
+            lines.extend(["", f"说明：{ctx}"])
+        raw_choices = args.get("choices")
+        if isinstance(raw_choices, list) and raw_choices:
+            lines.extend(["", "可选回复（可照抄其中一条，或自由回答）："])
+            for i, c in enumerate(raw_choices, 1):
+                if c is None:
+                    continue
+                s = str(c).strip()
+                if s:
+                    lines.append(f"{i}. {s}")
+        lines.extend(
+            [
+                "",
+                "（本回合已暂停：请在下一条消息中直接回复；收到后 Agent 会从当前进度继续。）",
+            ]
+        )
+        return ("\n".join(lines), False, None)
 
     return (f"未知 Skill 控制工具: {name}", False, None)

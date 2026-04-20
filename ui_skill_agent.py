@@ -5,20 +5,25 @@ import re
 import sys
 from html import escape
 from pathlib import Path
+from typing import Any, Callable
 
 from PySide6.QtCore import QPointF, Qt, QThread, Signal, QSize
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap, QTextCursor
+from PySide6.QtGui import QColor, QFont, QIcon, QMouseEvent, QPainter, QPen, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QApplication,
     QCheckBox,
     QDialog,
+    QButtonGroup,
     QDialogButtonBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSizePolicy,
     QStyleFactory,
@@ -34,7 +39,7 @@ import config
 from executor import Executor
 from llm import get_chat_model
 from memory import SqliteMemory
-from skill_agent import SkillAgent
+from skill_agent import SKILL_AGENT_AWAITING_USER_REPLY, SkillAgent
 from skill_agent_preferences import load_disabled_skill_ids, save_disabled_skill_ids
 
 
@@ -54,6 +59,9 @@ def _load_ui_style_sections() -> dict[str, str]:
 
 
 _UI_STYLES = _load_ui_style_sections()
+
+_INPUT_PLACEHOLDER_DEFAULT = "输入业务问题后发送…"
+_INPUT_PLACEHOLDER_AWAIT_USER = "Agent 正在等待你的补充回复…"
 
 _TAB_CLOSE_BTN_OBJECT_NAME = "skillAgentTabCloseButton"
 _TAB_CLOSE_ICON: QIcon | None = None
@@ -89,11 +97,157 @@ def _tab_close_icon() -> QIcon:
     return _TAB_CLOSE_ICON
 
 
-class SkillAgentWorkerThread(QThread):
-    """绑定发起请求时的 conversation 与聊天控件，避免切换标签后日志串页。"""
+class _ClickableChoiceLabel(QLabel):
+    """与 `QRadioButton` 配对：点击换行文案时选中该选项。"""
 
-    log_signal = Signal(str, str, QTextEdit)
-    finished_signal = Signal(str)
+    def __init__(self, text: str, radio: QRadioButton) -> None:
+        super().__init__(text)
+        self._radio = radio
+        self.setWordWrap(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet("color: #374151; background: transparent;")
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
+        self._radio.setChecked(True)
+        super().mousePressEvent(event)
+
+
+def _apply_chat_view_style(chat: QTextEdit) -> None:
+    chat.setReadOnly(True)
+    chat.setFont(QFont("Microsoft YaHei", 10))
+    chat.setAcceptRichText(True)
+    chat.setPlaceholderText("对话记录将显示在这里…")
+    chat.setStyleSheet(_UI_STYLES["chat_view_qtextedit"])
+    chat.setMinimumHeight(200)
+    chat.document().setDefaultStyleSheet(_UI_STYLES["chat_document_default"])
+
+
+class ChatSessionTab(QWidget):
+    """单个会话标签页：聊天记录 + 底部「待你回复」交互区（问题 + 单选建议项）。"""
+
+    def __init__(self, conversation_id: str, *, pending_db_history: bool = False) -> None:
+        super().__init__()
+        self.conversation_id = (conversation_id or "").strip()
+        self.pending_db_history = pending_db_history
+        self.chat_view = QTextEdit()
+        _apply_chat_view_style(self.chat_view)
+        if pending_db_history:
+            self.chat_view.setPlaceholderText("请点击本会话标签，加载数据库中的历史聊天记录…")
+
+        self._await_user_card = QFrame()
+        self._await_user_card.setObjectName("skillAgentAwaitUserCard")
+        self._await_user_card.setVisible(False)
+        self._await_user_card.setStyleSheet(_UI_STYLES.get("await_user_card_frame", ""))
+        self._await_inner = QVBoxLayout(self._await_user_card)
+        self._await_inner.setContentsMargins(12, 10, 12, 10)
+        self._await_inner.setSpacing(8)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        lay.addWidget(self.chat_view, stretch=1)
+        lay.addWidget(self._await_user_card, stretch=0)
+
+    def has_active_await_user_prompt(self) -> bool:
+        """底部「待你回复」交互区是否正在展示（用于恢复挂起会话时避免重复搭建）。"""
+        return self._await_user_card.isVisible()
+
+    def clear_await_user_ui(self) -> None:
+        self._await_user_card.setVisible(False)
+        while self._await_inner.count():
+            item = self._await_inner.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+    def show_await_user_prompt(
+        self,
+        spec: dict[str, Any],
+        *,
+        on_confirm_send: Callable[[str], None] | None = None,
+    ) -> None:
+        """首行展示问题；若有 choices 则下列单选组 +「确定」：选中后启用确定，点击后直接发送该文案。"""
+        self.clear_await_user_ui()
+        question = str(spec.get("question") or "").strip()
+        context = str(spec.get("context") or "").strip()
+        choices_raw = spec.get("choices")
+        choices: list[str] = []
+        if isinstance(choices_raw, list):
+            for c in choices_raw:
+                if c is None:
+                    continue
+                s = str(c).strip()
+                if s:
+                    choices.append(s)
+
+        q_lab = QLabel(question or "（模型未提供具体问题）")
+        q_lab.setObjectName("skillAgentAwaitUserQuestion")
+        q_lab.setWordWrap(True)
+        self._await_inner.addWidget(q_lab)
+
+        if context:
+            ctx_lab = QLabel(context)
+            ctx_lab.setObjectName("skillAgentAwaitUserHint")
+            ctx_lab.setWordWrap(True)
+            self._await_inner.addWidget(ctx_lab)
+
+        if choices:
+            hint = QLabel("请选择一个建议回答，点击下方「确定」将立即发送（无需再点发送）：")
+            hint.setObjectName("skillAgentAwaitUserHint")
+            hint.setWordWrap(True)
+            self._await_inner.addWidget(hint)
+            group = QButtonGroup(self._await_user_card)
+            group.setExclusive(True)
+            selected: dict[str, str | None] = {"text": None}
+            for label in choices:
+                row = QWidget()
+                row_l = QHBoxLayout(row)
+                row_l.setContentsMargins(0, 0, 0, 0)
+                row_l.setSpacing(8)
+                rb = QRadioButton()
+                rb.setProperty("choice_answer", label)
+                lab = _ClickableChoiceLabel(label, rb)
+                lab.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+                row_l.addWidget(rb, alignment=Qt.AlignmentFlag.AlignTop)
+                row_l.addWidget(lab, stretch=1)
+                group.addButton(rb)
+                self._await_inner.addWidget(row)
+
+            confirm_btn = QPushButton("确定")
+            confirm_btn.setObjectName("skillAgentAwaitUserConfirmButton")
+            confirm_btn.setEnabled(False)
+            confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+
+            def _on_choice(btn: QAbstractButton) -> None:
+                ans = btn.property("choice_answer")
+                text = str(ans) if ans is not None and str(ans) else btn.text()
+                selected["text"] = text.strip() or None
+                confirm_btn.setEnabled(bool(selected["text"]))
+
+            group.buttonClicked.connect(_on_choice)
+
+            def _on_confirm() -> None:
+                t = selected.get("text")
+                if not t or on_confirm_send is None:
+                    return
+                on_confirm_send(t)
+
+            confirm_btn.clicked.connect(_on_confirm)
+            self._await_inner.addWidget(confirm_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+        else:
+            free = QLabel("未提供固定选项：请在下方输入框自由输入后发送。")
+            free.setObjectName("skillAgentAwaitUserHint")
+            free.setWordWrap(True)
+            self._await_inner.addWidget(free)
+
+        self._await_user_card.setVisible(True)
+
+
+class SkillAgentWorkerThread(QThread):
+    """绑定发起请求时的 conversation 与会话页，避免切换标签后日志串页。"""
+
+    log_signal = Signal(str, str, object)
+    finished_signal = Signal(str, object)
 
     def __init__(
         self,
@@ -101,21 +255,21 @@ class SkillAgentWorkerThread(QThread):
         query: str,
         *,
         conversation_id: str,
-        target_chat: QTextEdit,
+        session_tab: ChatSessionTab,
     ) -> None:
         super().__init__()
         self.agent = agent
         self.query = query
         self.conversation_id = conversation_id
-        self.target_chat = target_chat
+        self.session_tab = session_tab
 
     def run(self) -> None:
         self.agent.set_conversation_id(self.conversation_id)
         result = self.agent.run(self.query, self._log_callback)
-        self.finished_signal.emit(result)
+        self.finished_signal.emit(result, self.session_tab)
 
     def _log_callback(self, message: str, msg_type: str = "info") -> None:
-        self.log_signal.emit(message, msg_type, self.target_chat)
+        self.log_signal.emit(message, msg_type, self.session_tab)
 
 
 def _normalize_newlines(text: str) -> str:
@@ -293,31 +447,64 @@ def _tab_title_for_conversation(conversation_id: str) -> str:
     return f"新会话 · {c[:5] or '?'}"
 
 
-def _apply_chat_view_style(chat: QTextEdit) -> None:
-    chat.setReadOnly(True)
-    chat.setFont(QFont("Microsoft YaHei", 10))
-    chat.setAcceptRichText(True)
-    chat.setPlaceholderText("对话记录将显示在这里…")
-    chat.setStyleSheet(_UI_STYLES["chat_view_qtextedit"])
-    chat.setMinimumHeight(200)
-    chat.document().setDefaultStyleSheet(_UI_STYLES["chat_document_default"])
+def _parse_await_user_log_json(message: str) -> dict[str, Any]:
+    """解析 `ask_user` 运行时 log 中的 JSON（question / context / choices）。"""
+    raw = (message or "").strip()
+    if not raw:
+        return {"question": "", "context": "", "choices": []}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"question": raw, "context": "", "choices": []}
+    if not isinstance(data, dict):
+        return {"question": raw, "context": "", "choices": []}
+    choices: list[str] = []
+    cr = data.get("choices")
+    if isinstance(cr, list):
+        for c in cr:
+            if c is None:
+                continue
+            s = str(c).strip()
+            if s:
+                choices.append(s)
+    return {
+        "question": str(data.get("question") or "").strip(),
+        "context": str(data.get("context") or "").strip(),
+        "choices": choices,
+    }
 
 
-class ChatSessionTab(QWidget):
-    """单个会话标签页：绑定 conversation_id 与聊天记录控件。"""
-
-    def __init__(self, conversation_id: str, *, pending_db_history: bool = False) -> None:
-        super().__init__()
-        self.conversation_id = (conversation_id or "").strip()
-        self.pending_db_history = pending_db_history
-        self.chat_view = QTextEdit()
-        _apply_chat_view_style(self.chat_view)
-        if pending_db_history:
-            self.chat_view.setPlaceholderText("请点击本会话标签，加载数据库中的历史聊天记录…")
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
-        lay.addWidget(self.chat_view)
+def _ask_user_spec_from_record(meta: dict[str, Any], content: str) -> dict[str, Any]:
+    """从持久化 tool 消息的 metadata.args 恢复 ask_user 结构；失败时从正文兜底。"""
+    raw = meta.get("args")
+    args: dict[str, Any] = {}
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                args = parsed
+        except json.JSONDecodeError:
+            pass
+    elif isinstance(raw, dict):
+        args = raw
+    choices: list[str] = []
+    cr = args.get("choices")
+    if isinstance(cr, list):
+        for c in cr:
+            if c is None:
+                continue
+            s = str(c).strip()
+            if s:
+                choices.append(s)
+    q = str(args.get("question") or "").strip()
+    ctx = str(args.get("context") or "").strip()
+    if not q:
+        for line in (content or "").splitlines():
+            s = line.strip()
+            if s and not s.startswith("（") and not s.startswith("可选"):
+                q = s
+                break
+    return {"question": q, "context": ctx, "choices": choices}
 
 
 class SkillAgentMainWindow(QMainWindow):
@@ -383,7 +570,7 @@ class SkillAgentMainWindow(QMainWindow):
 
         row = QHBoxLayout()
         self.input_edit = QLineEdit()
-        self.input_edit.setPlaceholderText("输入业务问题后发送…")
+        self.input_edit.setPlaceholderText(_INPUT_PLACEHOLDER_DEFAULT)
         self.input_edit.setFont(QFont("Microsoft YaHei", 10))
         self.input_edit.setMinimumHeight(36)
         self.input_edit.returnPressed.connect(self._on_send)
@@ -440,10 +627,22 @@ class SkillAgentMainWindow(QMainWindow):
                 self._on_tab_close_requested(i)
                 return
 
-    def _replay_messages_to_chat(self, chat_view: QTextEdit, records: list[dict]) -> None:
+    def _replay_messages_to_chat(
+        self,
+        chat_view: QTextEdit,
+        records: list[dict],
+        *,
+        conversation_id: str | None = None,
+    ) -> None:
         """按库中顺序把消息画回聊天区（与运行时 log_callback 展示规则尽量一致）。"""
         show_tool_ui = config.SKILL_AGENT_UI_SHOW_TOOL_CALLS
-        for m in records:
+        pending_live_ask = False
+        if conversation_id and SkillAgent.conversation_awaits_user_clarification(
+            self._memory, conversation_id
+        ):
+            pending_live_ask = True
+        n = len(records)
+        for idx, m in enumerate(records):
             role = str(m.get("role") or "")
             content = str(m.get("content") or "")
             meta = m.get("metadata")
@@ -467,6 +666,12 @@ class SkillAgentMainWindow(QMainWindow):
                 else:
                     self._append_assistant_markdown(chat_view, content)
             elif role == "tool":
+                if name == "ask_user" or meta.get("type") == "ask_user":
+                    # 仍挂起在 ask_user 的最后一条：改由底部交互区展示，避免仅静态「历史」卡无法点确定
+                    if pending_live_ask and idx == n - 1:
+                        continue
+                    self._append_ask_user_replay_card(chat_view, meta, content)
+                    continue
                 if not show_tool_ui:
                     continue
                 if name == "select_skill" or meta.get("type") == "skill":
@@ -498,6 +703,7 @@ class SkillAgentMainWindow(QMainWindow):
         first_tab = self.chat_tabs.widget(0)
         if isinstance(first_tab, ChatSessionTab):
             self._ensure_tab_history_loaded(first_tab)
+        self._sync_input_placeholder_for_active_tab()
 
     def _ensure_tab_history_loaded(self, tab: ChatSessionTab) -> None:
         """仅在需要时调用 Memory 拉取消息并渲染；不触发大模型。"""
@@ -506,7 +712,36 @@ class SkillAgentMainWindow(QMainWindow):
         tab.pending_db_history = False
         tab.chat_view.setPlaceholderText("对话记录将显示在这里…")
         records = self.skill_agent.message_records_for_conversation(tab.conversation_id)
-        self._replay_messages_to_chat(tab.chat_view, records)
+        self._replay_messages_to_chat(
+            tab.chat_view, records, conversation_id=tab.conversation_id
+        )
+        if SkillAgent.conversation_awaits_user_clarification(self._memory, tab.conversation_id):
+            self._restore_pending_await_user_panel(tab)
+        if self.chat_tabs.currentWidget() is tab:
+            self._sync_input_placeholder_for_active_tab()
+
+    def _restore_pending_await_user_panel(self, tab: ChatSessionTab) -> None:
+        """从库中最后一条 ask_user 恢复可选项与「确定」，与线上一致。"""
+        records = self.skill_agent.message_records_for_conversation(tab.conversation_id)
+        if not records:
+            return
+        last = records[-1]
+        if str(last.get("role") or "") != "tool":
+            return
+        meta = last.get("metadata")
+        if not isinstance(meta, dict):
+            meta = {}
+        if meta.get("name") != "ask_user":
+            return
+        content = str(last.get("content", "") or "")
+        if content.startswith("错误"):
+            return
+        spec = _ask_user_spec_from_record(meta, content)
+        st = tab
+        tab.show_await_user_prompt(
+            spec,
+            on_confirm_send=lambda t, _st=st: self._send_user_message(t, session_tab=_st),
+        )
 
     def _active_session_tab(self) -> ChatSessionTab | None:
         w = self.chat_tabs.currentWidget()
@@ -520,6 +755,25 @@ class SkillAgentMainWindow(QMainWindow):
         tab = self._active_session_tab()
         if tab is not None:
             self.skill_agent.set_conversation_id(tab.conversation_id)
+            if (
+                not tab.pending_db_history
+                and SkillAgent.conversation_awaits_user_clarification(
+                    self._memory, tab.conversation_id
+                )
+                and not tab.has_active_await_user_prompt()
+            ):
+                self._restore_pending_await_user_panel(tab)
+        self._sync_input_placeholder_for_active_tab()
+
+    def _sync_input_placeholder_for_active_tab(self) -> None:
+        tab = self._active_session_tab()
+        if tab is None:
+            self.input_edit.setPlaceholderText(_INPUT_PLACEHOLDER_DEFAULT)
+            return
+        if SkillAgent.conversation_awaits_user_clarification(self._memory, tab.conversation_id):
+            self.input_edit.setPlaceholderText(_INPUT_PLACEHOLDER_AWAIT_USER)
+        else:
+            self.input_edit.setPlaceholderText(_INPUT_PLACEHOLDER_DEFAULT)
 
     def _on_tab_bar_clicked(self, index: int) -> None:
         """用户点击标签栏时才拉取并渲染该会话的数据库消息（大模型仍在用户点击发送后由 run 触发）。"""
@@ -574,6 +828,7 @@ class SkillAgentMainWindow(QMainWindow):
         )
         self._append_assistant_card(tab.chat_view, hint, subtitle="系统")
         self._refresh_tab_close_buttons()
+        self._sync_input_placeholder_for_active_tab()
 
     def _append_user(self, chat_view: QTextEdit, text: str) -> None:
         body = _plain_block_html(text)
@@ -635,22 +890,67 @@ class SkillAgentMainWindow(QMainWindow):
         frag = _markdown_fragment_html(markdown)
         self._append_assistant_card(chat_view, frag, subtitle="Skill 文档")
 
-    def _on_send(self) -> None:
-        text = self.input_edit.text().strip()
+    def _append_ask_user_replay_card(
+        self, chat_view: QTextEdit, meta: dict[str, Any], content: str
+    ) -> None:
+        """历史记录中的 ask_user：首行问题 + 下方静态「建议选项」列表（无交互）。"""
+        spec = _ask_user_spec_from_record(meta, content)
+        q = escape(spec["question"] or "（无问题摘要）")
+        parts = [
+            f'<p style="font-weight:600;font-size:11pt;margin:0 0 10px 0;color:#1f2937;">{q}</p>'
+        ]
+        ctx = str(spec.get("context") or "").strip()
+        if ctx:
+            parts.append(
+                f'<p style="color:#6b7280;font-size:10pt;margin:4px 0 8px 0;">{escape(ctx)}</p>'
+            )
+        raw_choices = spec.get("choices")
+        if not isinstance(raw_choices, list):
+            raw_choices = []
+        opts: list[str] = []
+        for c in raw_choices:
+            if c is None:
+                continue
+            s = str(c).strip()
+            if s:
+                opts.append(s)
+        if opts:
+            parts.append(
+                '<p style="color:#6b7280;font-size:10pt;margin:0 0 6px 0;">建议选项（历史）：</p>'
+            )
+            parts.append(
+                '<table cellspacing="0" cellpadding="0" '
+                'style="border:1px solid #e5e7eb;border-radius:8px;width:100%;">'
+            )
+            for i, c in enumerate(opts):
+                bt = "border-top:1px solid #e5e7eb;" if i else ""
+                parts.append(
+                    f'<tr><td style="padding:8px 12px;{bt}">'
+                    f'<span style="color:#2563eb;font-weight:600;">○</span> '
+                    f'<span style="color:#374151;">{escape(c)}</span></td></tr>'
+                )
+            parts.append("</table>")
+        body = "".join(parts)
+        self._append_assistant_card(chat_view, body, subtitle="待你回复（历史）")
+
+    def _send_user_message(self, text: str, *, session_tab: ChatSessionTab | None = None) -> None:
+        """将用户文案写入会话并启动 Agent（与点「发送」相同，不经过输入框）。"""
+        text = (text or "").strip()
         if not text:
             QMessageBox.warning(self, "提示", "请输入内容")
             return
         if self.worker_thread and self.worker_thread.isRunning():
             QMessageBox.warning(self, "提示", "上一轮流式仍在执行，请稍候")
             return
-        tab = self._active_session_tab()
-        chat = self._active_chat_view()
+        tab = session_tab if session_tab is not None else self._active_session_tab()
+        chat = tab.chat_view if tab is not None else None
         if tab is None or chat is None:
             QMessageBox.warning(self, "提示", "没有可用的会话标签页")
             return
 
         self.skill_agent.set_conversation_id(tab.conversation_id)
         self._append_user(chat, text)
+        tab.clear_await_user_ui()
         self.input_edit.clear()
 
         self.send_btn.setEnabled(False)
@@ -660,15 +960,25 @@ class SkillAgentMainWindow(QMainWindow):
             self.skill_agent,
             text,
             conversation_id=tab.conversation_id,
-            target_chat=chat,
+            session_tab=tab,
         )
         self.worker_thread.log_signal.connect(self._on_log)
-        self.worker_thread.finished_signal.connect(self._on_finished)
+        self.worker_thread.finished_signal.connect(self._on_worker_finished)
         self.worker_thread.start()
 
-    def _on_log(self, message: str, msg_type: str, target_chat: QTextEdit) -> None:
+    def _on_send(self) -> None:
+        text = self.input_edit.text().strip()
+        if not text:
+            QMessageBox.warning(self, "提示", "请输入内容")
+            return
+        self._send_user_message(text)
+
+    def _on_log(self, message: str, msg_type: str, session_tab: object) -> None:
+        if not isinstance(session_tab, ChatSessionTab):
+            return
+        target_chat = session_tab.chat_view
         show_tool_ui = config.SKILL_AGENT_UI_SHOW_TOOL_CALLS
-        if msg_type in ("tool","base_tool"):
+        if msg_type in ("tool", "base_tool"):
             if show_tool_ui:
                 self._append_tool_line(target_chat, message)
         elif msg_type == "doc":
@@ -676,12 +986,22 @@ class SkillAgentMainWindow(QMainWindow):
                 self._append_doc_markdown(target_chat, message)
         elif msg_type in ("assistant", "response"):
             self._append_assistant_markdown(target_chat, message)
-        elif msg_type in ("think"):
+        elif msg_type in ("think",):
             self._append_assistant_think_markdown(target_chat, message)
+        elif msg_type == "await_user":
+            spec = _parse_await_user_log_json(message)
+            st = session_tab
+            session_tab.show_await_user_prompt(
+                spec,
+                on_confirm_send=lambda t, _st=st: self._send_user_message(t, session_tab=_st),
+            )
 
-    def _on_finished(self, _result: str) -> None:
+    def _on_worker_finished(self, result: str, session_tab: object) -> None:
         self.send_btn.setEnabled(True)
         self.input_edit.setEnabled(True)
+        if isinstance(session_tab, ChatSessionTab) and result != SKILL_AGENT_AWAITING_USER_REPLY:
+            session_tab.clear_await_user_ui()
+        self._sync_input_placeholder_for_active_tab()
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         if self.worker_thread and self.worker_thread.isRunning():

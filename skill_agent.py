@@ -21,6 +21,28 @@ from skill import (
     SKILL_CONTROL_TOOL_DEFINITIONS,
 )
 
+# `SkillAgent.run` 在调用 `ask_user` 且成功挂起时返回该常量（非自然语言，便于 UI 识别）。
+SKILL_AGENT_AWAITING_USER_REPLY = "__SKILL_AGENT_AWAITING_USER_REPLY__"
+
+
+def _ask_user_ui_log_payload(args: dict[str, Any]) -> str:
+    """供界面解析：问题 + 可选上下文 + 建议选项列表（JSON）。"""
+    choices_raw = args.get("choices")
+    choices: list[str] = []
+    if isinstance(choices_raw, list):
+        for c in choices_raw:
+            if c is None:
+                continue
+            s = str(c).strip()
+            if s:
+                choices.append(s)
+    payload = {
+        "question": str(args.get("question", "")).strip(),
+        "context": str(args.get("context", "")).strip(),
+        "choices": choices,
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
 
 def _message_text(message: Any) -> str:
     c = getattr(message, "content", None)
@@ -45,6 +67,7 @@ def _build_system_prompt(catalog: str) -> str:
 3. 部分Skill里面描述说明需要执行相关原子工具时，请确定要传入的path是否带上了当前skill的dir；若需执行某 Skill 文档中引用的 `scripts/*.py`，应使用 `run_skill_script` 并传入对应 `skill_id`。
 4. 当你认为已满足用户目标时，调用 `finish`，在参数 `message` 中给出完整、用户可读的最终答复。
 5. 若当前没有可用 Skill，可直接用原子工具与常识完成用户请求，并 `finish` 结束。
+6. 若缺关键信息、存在多种合理策略需用户选择、或涉及敏感/不可逆操作需确认，调用 `ask_user` 提问；用户在下一条消息回复后你会从当前进度继续。勿滥用，同一任务内澄清宜少而精。
 """
 
 
@@ -110,6 +133,31 @@ class SkillAgent:
             return []
         return self.memory.get_message_records((conversation_id or "").strip())
 
+    @staticmethod
+    def conversation_awaits_user_clarification(
+        memory: Memory | None,
+        conversation_id: str,
+    ) -> bool:
+        """最后一条持久化消息是否为成功的 `ask_user` 挂起（错误类 ask_user 不算）。"""
+        if memory is None:
+            return False
+        cid = (conversation_id or "").strip()
+        if not cid:
+            return False
+        records = memory.get_message_records(cid)
+        if not records:
+            return False
+        last = records[-1]
+        if last.get("role") != "tool":
+            return False
+        meta = last.get("metadata") or {}
+        if meta.get("name") != "ask_user":
+            return False
+        content = str(last.get("content", "") or "")
+        if content.startswith("错误"):
+            return False
+        return True
+
     def _merged_tools(self, model: BaseChatModel) -> list[dict]:
         return tools_for_model(model, self._definitions)
 
@@ -120,7 +168,7 @@ class SkillAgent:
         active_skill_text: list[str],
         active_skill_ids: list[str],
     ) -> tuple[str, bool, Optional[str]]:
-        if name in ("select_skill", "finish"):
+        if name in ("select_skill", "finish", "ask_user"):
             return execute_skill_control_tool(
                 name,
                 args,
@@ -162,9 +210,17 @@ class SkillAgent:
         cid = self._conversation_id
         args_str=json.dumps(args, ensure_ascii=False, indent=2)
         if fname == "select_skill":
-            self.memory.append_message(cid, "tool", str(result), metadata={"type":"skill","name": fname,"args":args_str})
+            meta_type = "skill"
+        elif fname == "ask_user":
+            meta_type = "ask_user"
         else:
-            self.memory.append_message(cid, "tool", str(result), metadata={"type":"base_tool","name": fname,"args":args_str})
+            meta_type = "base_tool"
+        self.memory.append_message(
+            cid,
+            "tool",
+            str(result),
+            metadata={"type": meta_type, "name": fname, "args": args_str},
+        )
         messages.append({"role": "tool", "name": fname, "content": str(result)})
         if fname == "select_skill" and active_skill_text and not str(result).startswith("错误"):
             self.memory.set_active_skills(cid, list(active_skill_ids))
@@ -254,7 +310,7 @@ class SkillAgent:
                     )
                     log_callback(prefix + str(result), "doc")
 
-            if log_callback and fname != "finish" and fname != "select_skill":
+            if log_callback and fname not in ("finish", "select_skill", "ask_user"):
                 r = str(result)
                 if len(r) > 12000:
                     r = r[:12000] + "\n\n…（内容已截断）"
@@ -267,6 +323,22 @@ class SkillAgent:
                     self.memory.append_message(cid, "tool", str(result), metadata={"name": fname})
                     self.memory.append_message(cid, "assistant", str(final))
                 return final
+
+            if fname == "ask_user" and not str(result).startswith("错误"):
+                if self.memory is not None:
+                    self._persist_after_tool_turn(
+                        fname,
+                        args,
+                        str(result),
+                        active_skill_text,
+                        active_skill_ids,
+                        messages,
+                    )
+                else:
+                    messages.append({"role": "tool", "name": fname, "content": str(result)})
+                if log_callback:
+                    log_callback(_ask_user_ui_log_payload(args), "await_user")
+                return SKILL_AGENT_AWAITING_USER_REPLY
 
             if self.memory is not None:
                 self._persist_after_tool_turn(fname, args,str(result), active_skill_text, active_skill_ids, messages)
