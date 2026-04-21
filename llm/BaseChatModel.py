@@ -94,7 +94,9 @@ class BaseChatModel(ABC):
             messages=messages,
             tools=tools,
             tool_choice="auto",
-            temperature=self.temperature,
+            temperature=0.7,
+            top_p=0.95,
+            frequency_penalty=0.6,
             extra_body=self.extra_body,
         )
         msg = response.choices[0].message
